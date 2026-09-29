@@ -6,6 +6,7 @@ a tool.
 """
 import json
 import pathlib
+import re
 import statistics
 
 from lab import metrics
@@ -34,6 +35,24 @@ def available_runners():
 def _mean(values):
     values = [v for v in values if v is not None]
     return statistics.fmean(values) if values else None
+
+
+def _pooled_empty_cell_ratio(table_structures):
+    """Empty cells over total cells, pooled across every paper's table.
+
+    Averaging each paper's own ratio (mean-of-papers) weights a paper with one
+    small table the same as a paper with forty large ones. Pooling weights by
+    cell count instead, which is what "empty cells" should mean when read as
+    a single number. On this corpus the two disagree materially (pdfplumber
+    0.472 pooled vs 0.612 mean-of-papers), so pooling is the fix rather than
+    just relabeling.
+    """
+    total_cells = sum(t["cells"] for t in table_structures if t["empty_cell_ratio"] is not None)
+    if not total_cells:
+        return None
+    total_empty = sum(t["empty_cell_ratio"] * t["cells"]
+                       for t in table_structures if t["empty_cell_ratio"] is not None)
+    return total_empty / total_cells
 
 
 def score(results_by_runner, floor=FLOOR_RUNNER):
@@ -90,8 +109,8 @@ def score(results_by_runner, floor=FLOOR_RUNNER):
             },
             "tables": {
                 "total": sum(p["tables"]["tables"] for p in per_paper.values()),
-                "empty_cell_ratio": _mean([p["tables"]["empty_cell_ratio"]
-                                           for p in per_paper.values()]),
+                "empty_cell_ratio": _pooled_empty_cell_ratio(
+                    [p["tables"] for p in per_paper.values()]),
             },
             "arithmetic": {
                 "checked": arithmetic_checked,
@@ -152,18 +171,28 @@ def render(scored):
         "When `arith checked` is nonzero, read `arith pass` first — it is the only "
         "column that can be flatly wrong.",
         "",
-        "Caveat: on this corpus, `arith checked` reads 0 across all runners because "
-        "these papers contain literature-comparison tables with quantity names like "
-        "`Total biomass (g/L)` rather than aggregate-total rows or columns. This is not "
-        "a failure of any runner; it is the honest outcome of a label-free metric on a "
-        "corpus without checkable totals. The measurement weight falls to coverage, "
-        "dropped pages, and cross-runner agreement.",
+        "Caveat: on this corpus, `arith checked` reads 0 across all runners. These "
+        "papers have no whole-cell total labels — a cell that is just `Total`, `Sum`, "
+        "or `Overall`. Candidates such as `Total GWP 100` exist but are quantity names, "
+        "not aggregate labels, and are not matched by design (matching them would "
+        "silently sum unrelated columns beside them). This is not a failure of any "
+        "runner; it is the honest outcome of a label-free metric on a corpus without "
+        "checkable totals. The measurement weight falls to coverage and cross-runner "
+        "agreement.",
         "",
-        "Caveat: `order monotonic` is not evidence of correct reading order. It reads 1.000 "
-        "for every runner because each runner already emits blocks in sorted order (the "
-        "docling path sorts by page, top, left; the line-based runners bucket lines by "
-        "rounded top), so asking whether sorted output is sorted always answers yes. "
-        "`midword` is the weaker signal that actually varies.",
+        "Caveat: `order monotonic` still is not evidence of correct reading order, but it "
+        "is no longer tautological for every runner. `pdfplumber` and `pdfjs-node` bucket "
+        "lines by rounded top before emitting them, so their blocks are geometrically "
+        "sorted by construction and this always reads 1.000 for them — asking whether "
+        "sorted output is sorted always answers yes. `docling-default` and `docling-tuned` "
+        "now keep docling's own `texts[]` order instead of being re-sorted geometrically "
+        "(see Findings), so this column measures something real for them for the first "
+        "time, and it is below 1.000 (0.919 / 0.960). Spot-checked on `A. Priyadarsini et "
+        "al. 2023`: the backward jumps there are not clean two-column breaks — they are "
+        "page furniture (footers, stray page-number glyphs) sitting between body text in "
+        "`texts[]`, and this runner's own table-after-text placement (a table's visual "
+        "position can be near the top of a page it is read after in full). `midword` "
+        "remains the weaker, but real, per-block signal.",
         "",
         "Caveat: `sections/6` and the chunk columns compare within a runner family, not "
         "across. The docling runners supply their own `section_header` labels, while "
@@ -172,13 +201,18 @@ def render(scored):
         "pdfjs 2 — reading that as \"docling detects structure better\" would be an "
         "artifact of the classifier, not a measurement.",
         "",
-        "Caveat: read `dropped pages` alongside `cov. mean-of-medians`, never that figure "
-        "alone. Measured: `docling-default` had a median page ratio of 1.002 while its total "
-        "characters were 0.909x the floor, because it lost one whole page rather than "
-        "degrading uniformly. The mean-of-medians alone hides that entirely.",
+        "Caveat: `dropped pages` reads 0 for every runner on this corpus, and that is a "
+        "fix, not a finding. Earlier, `chars_per_page` counted only paragraph, header, "
+        "caption, and other text blocks — but a table block always carries `text: \"\"`, "
+        "with its content in `tables[].cells` instead. Every page whose content was "
+        "mostly a table therefore looked like a page where the runner lost content, "
+        "which was the entire explanation for every dropped page any runner had shown. "
+        "Table cells now count toward their own page (see Findings for the corrected "
+        "totals), and the detector stays in the report because it would still catch a "
+        "real regression — it simply has nothing to report on this corpus today.",
         "",
         "| runner | papers | cov. papers | cov. mean-of-medians | dropped pages | chars | "
-        "order monotonic | midword | sections/6 | tables | empty cells | arith checked | "
+        "order monotonic | midword | sections/6 | tables | empty cells (pooled) | arith checked | "
         "arith pass | chunks | orphans | s/page |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
@@ -205,7 +239,13 @@ def render(scored):
         listed = ", ".join(f"{r['paper_id']} ({r['median_page_ratio']})" for r in rows) or "—"
         lines.append(f"- `{runner}`: {listed}")
 
-    lines += ["", "## Chunk straddling", ""]
+    lines += ["", "## Chunk straddling", "",
+              "Caveat: this reads 0 for every runner by construction, not because "
+              "chunking is safe in general. `chunk_blocks` flushes the buffer at "
+              "every `section_header` block, so a chunk cannot straddle a header it "
+              "would have to be built across in the first place. This metric cannot "
+              "catch a straddling failure today; it exists to catch a regression if "
+              "a future chunker stops flushing on headers.", ""]
     for runner, s in scored["runners"].items():
         median_chunk = _cell(s["chunks"]["median_chars"], 0)
         lines.append(f"- `{runner}`: {s['chunks']['straddling_chunks']} chunks cross a "
@@ -214,12 +254,28 @@ def render(scored):
     return "\n".join(lines)
 
 
+FINDINGS_RE = re.compile(r"^## Findings\b.*", re.S | re.M)
+
+
 def write(floor=FLOOR_RUNNER):
+    """Regenerate the generated tables/caveats, but keep the hand-written
+    Findings section untouched.
+
+    `compare` is meant to be re-run whenever results change, and doing so
+    used to overwrite the whole file — including everything from `## Findings`
+    onward, which is hand-written prose no runner regenerates. Preserving it
+    means `compare` only ever replaces the parts it actually computed.
+    """
     results = {runner: load_results(runner) for runner in available_runners()}
     results = {k: v for k, v in results.items() if v}
     if not results:
         raise SystemExit("no results found — run at least one runner first")
     scored = score(results, floor=floor)
+    rendered = render(scored)
     RESULTS_DIR.mkdir(exist_ok=True)
-    REPORT_PATH.write_text(render(scored))
+    if REPORT_PATH.exists():
+        match = FINDINGS_RE.search(REPORT_PATH.read_text())
+        if match:
+            rendered = rendered.rstrip("\n") + "\n\n" + match.group(0).rstrip("\n") + "\n"
+    REPORT_PATH.write_text(rendered)
     return scored

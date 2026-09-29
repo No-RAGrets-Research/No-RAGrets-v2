@@ -99,10 +99,24 @@ def test_content_hash_notices_text_change():
     assert ir.content_hash(a) != ir.content_hash(b)
 
 
-def test_chars_per_page_counts_only_text_blocks():
+def test_chars_per_page_counts_text_blocks_and_table_cells():
     counts = ir.chars_per_page(good_ir())
     assert counts[1] == len("Methods") + len("We did the thing.")
-    assert counts[2] == 0
+    # good_ir()'s page-2 table has no text block, only cells: docling emits
+    # text: "" on table blocks and puts the content in tables[].cells, so
+    # those characters must still land on the table's page.
+    table_chars = sum(len(cell) for row in good_ir()["tables"][0]["cells"] for cell in row)
+    assert counts[2] == table_chars
+
+
+def test_chars_per_page_puts_table_cells_on_the_table_s_own_page():
+    """A table's cells count toward its own page, not any other page."""
+    fixture = good_ir()
+    fixture["pages"] = 3
+    fixture["tables"][0]["page"] = 2
+    counts = ir.chars_per_page(fixture)
+    assert counts[3] == 0, "page 3 has neither blocks nor tables"
+    assert counts[2] > 0, "page 2's table cells must be counted"
 
 
 def test_verify_reports_missing_extra_and_changed():
@@ -357,6 +371,40 @@ def test_ir_from_docling_dict_rebuilds_a_table_without_a_grid():
     }
     out = runners.ir_from_docling_dict(doc, "fixture", "0" * 64, 1.0, "d", "v")
     assert out["tables"][0]["cells"] == [["x", "1"], ["y", ""]]
+
+
+def test_ir_from_docling_dict_preserves_reading_order_across_columns():
+    """Two-column page: docling's texts[] lists the left column then the right
+    column, but geometrically the left column's second block sits below the
+    right column's first block. The old (top, left) geometric sort would
+    interleave the columns; the fix must keep docling's own texts[] order
+    instead."""
+    doc = {
+        "schema_name": "DoclingDocument", "version": "1.8.0",
+        "pages": {"1": {"page_no": 1, "size": {"width": 400.0, "height": 400.0}}},
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "text", "text": "Left paragraph one.",
+             "prov": [{"page_no": 1, "bbox": {"l": 50, "t": 390, "r": 190, "b": 370,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+            {"self_ref": "#/texts/1", "label": "text", "text": "Left paragraph two.",
+             "prov": [{"page_no": 1, "bbox": {"l": 50, "t": 200, "r": 190, "b": 180,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+            {"self_ref": "#/texts/2", "label": "text", "text": "Right paragraph one.",
+             "prov": [{"page_no": 1, "bbox": {"l": 300, "t": 380, "r": 390, "b": 360,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+            {"self_ref": "#/texts/3", "label": "text", "text": "Right paragraph two.",
+             "prov": [{"page_no": 1, "bbox": {"l": 300, "t": 190, "r": 390, "b": 170,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+        ],
+        "tables": [],
+    }
+    # Sanity check the geometry actually interleaves top-down (this is what
+    # made the old sort wrong): Left1=10, Right1=20, Left2=200, Right2=210.
+    out = runners.ir_from_docling_dict(doc, "fixture", "0" * 64, 1.0, "d", "v")
+    texts = [b["text"] for b in out["blocks"]]
+    left_positions = [texts.index(t) for t in ("Left paragraph one.", "Left paragraph two.")]
+    right_positions = [texts.index(t) for t in ("Right paragraph one.", "Right paragraph two.")]
+    assert max(left_positions) < min(right_positions), texts
 
 
 def test_ir_from_docling_dict_omits_bbox_for_a_page_missing_its_height():

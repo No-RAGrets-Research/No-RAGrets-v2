@@ -2,26 +2,19 @@
   "name": "no-ragrets-v2",
   "version": "1.0.0",
   "description": "Revisiting No-Ragrets 6 months later to design a better and complete system.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/No-RAGrets-Research/No-RAGrets-v2.git"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "type": "module",
   "bugs": {
     "url": "https://github.com/No-RAGrets-Research/No-RAGrets-v2/issues"
   },
   "homepage": "https://github.com/No-RAGrets-Research/No-RAGrets-v2#readme",
   "dependencies": {
-    "pdfjs-dist": "^4.7.76"
+    "pdfjs-dist": "4.7.76"
   }
 }

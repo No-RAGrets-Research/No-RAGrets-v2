@@ -27,7 +27,13 @@ reading order, and cost — and states plainly where each one is silent. See
 
 ## Setup
 
+Built and run on Python 3.12.8 and Node 24. Every command below runs from the
+repo root.
+
 ```
+python3.12 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+npm ci
 export NORAGRETS_CORPUS=/path/to/papers
 ```
 
@@ -36,6 +42,15 @@ this lab needs, in particular **docling 2.60.0**. Docling 2.123.0 made
 threaded docling-parse the default (PR #3764), which drops most of a scanned
 PDF's OCR text (open issue #4357) and runs roughly 4x slower on CPU (open
 issue #4174). The pin avoids both until upstream resolves them.
+
+`import-baseline` additionally needs a directory of pre-converted
+DoclingDocument JSON — in this project, `No-RAGrets-Master/data/docling_json`
+— since importing an existing baseline is how `docling-default` avoids
+re-paying its own compute cost.
+
+Determinism is not a report column. It is verified separately by re-running a
+runner and comparing `ir.content_hash()` across the two results — an equal
+hash means byte-for-byte identical output apart from timing.
 
 ## Commands
 

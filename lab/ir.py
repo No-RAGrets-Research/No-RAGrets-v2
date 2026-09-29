@@ -88,17 +88,34 @@ def content_hash(ir):
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _table_cell_chars(table):
+    return sum(len(cell) for row in table["cells"] for cell in row if cell)
+
+
 def chars_per_page(ir):
-    """Text characters recovered per page. Tables carry no text of their own."""
+    """Text characters recovered per page, including table cell text.
+
+    A table block's own `text` is always "" (the runners put its content in
+    `tables[].cells` instead), so a page consisting mostly of a table looked
+    like a page where the runner lost content unless its cells are counted
+    here too.
+    """
     counts = {p: 0 for p in range(1, ir["pages"] + 1)}
     for b in ir["blocks"]:
         if b["kind"] in TEXT_KINDS:
             counts[b["page"]] = counts.get(b["page"], 0) + len(b["text"])
+    for t in ir["tables"]:
+        counts[t["page"]] = counts.get(t["page"], 0) + _table_cell_chars(t)
     return counts
 
 
 def page_text(ir, page):
-    return " ".join(
+    parts = [
         b["text"] for b in ir["blocks"]
         if b["page"] == page and b["kind"] in TEXT_KINDS
-    )
+    ]
+    parts += [
+        cell for t in ir["tables"] if t["page"] == page
+        for row in t["cells"] for cell in row if cell
+    ]
+    return " ".join(parts)

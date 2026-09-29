@@ -344,11 +344,30 @@ def _docling_cells(data):
 
 
 def ir_from_docling_dict(doc, paper_id, sha256, wall_seconds, runner_name, runner_version):
+    """Build the IR, preserving docling's own reading order.
+
+    Docling's `texts[]` is already in reading order (that is what
+    DoclingDocument means by the list). Re-sorting it geometrically by
+    (top, left) looks reasonable but is wrong on any multi-column page: it
+    interleaves columns whenever one column's lower block sits above the
+    other column's upper block, destroying the order docling supplied. So
+    the only sort here is a *stable* one on page number, keeping each text's
+    original `texts[]` index as the tiebreaker. Table blocks carry no
+    chunkable text of their own (`kind == "table"`, `text == ""`), so they
+    are placed after that page's text blocks — the same placement already
+    used for the pdfplumber runner, which appends a page's tables before its
+    text lines.
+
+    A `body.children` tree walk was considered instead and rejected: captions
+    hang off their table's `captions` ref rather than `body`, and headers and
+    footers live under `furniture`, so walking `body` alone silently drops
+    many texts that `texts[]` still has.
+    """
     heights = _page_heights(doc)
     by_ref = {t.get("self_ref"): (t.get("text") or "") for t in doc.get("texts") or []}
 
     items = []
-    for text_item in doc.get("texts") or []:
+    for index, text_item in enumerate(doc.get("texts") or []):
         page, bbox = _docling_prov(text_item, heights)
         body = text_item.get("text") or ""
         if not body.strip() or page is None:
@@ -357,10 +376,11 @@ def ir_from_docling_dict(doc, paper_id, sha256, wall_seconds, runner_name, runne
         if kind == "paragraph":
             # Docling labels many headers plainly "text"; re-check by content.
             kind = classify(body)
-        items.append((page, bbox, {"page": int(page), "kind": kind, "text": body, "bbox": bbox}))
+        block = {"page": int(page), "kind": kind, "text": body, "bbox": bbox}
+        items.append((int(page), 0, index, block))
 
     tables = []
-    for table_item in doc.get("tables") or []:
+    for index, table_item in enumerate(doc.get("tables") or []):
         page, bbox = _docling_prov(table_item, heights)
         if page is None:
             continue
@@ -373,18 +393,12 @@ def ir_from_docling_dict(doc, paper_id, sha256, wall_seconds, runner_name, runne
             "page": int(page), "rows": len(cells), "cols": cols,
             "cells": cells, "caption": caption,
         })
-        items.append((page, bbox, {"page": int(page), "kind": "table", "text": "", "bbox": bbox}))
+        block = {"page": int(page), "kind": "table", "text": "", "bbox": bbox}
+        # is_table=1 sorts after this page's text blocks (is_table=0).
+        items.append((int(page), 1, index, block))
 
-    def sort_key(entry):
-        page, bbox, _ = entry
-        # A block with no provenance has an unknown position; sorting it last
-        # (not at 0.0, which is page-top) means it cannot displace the blocks
-        # whose position is known.
-        top = bbox[1] if bbox else float("inf")
-        left = bbox[0] if bbox else 0.0
-        return (int(page), round(top, 1), round(left, 1))
-
-    blocks = [block for _, _, block in sorted(items, key=sort_key)]
+    items.sort(key=lambda entry: entry[:3])
+    blocks = [entry[3] for entry in items]
     pages = max(heights) if heights else max((b["page"] for b in blocks), default=1)
     return finish(paper_id, runner_name, runner_version, sha256,
                   int(pages), wall_seconds, blocks, tables)
@@ -455,13 +469,44 @@ def tuned_converter():
     })
 
 
+def _ocr_engine_suffix():
+    """Which engine OcrAutoOptions actually resolves to on this machine.
+
+    docling's OcrAutoModel tries ocrmac first on darwin, falling back to
+    rapidocr (onnxruntime backend) elsewhere or if ocrmac is not installed.
+    Recording the resolved engine in runner_version matters because the two
+    produce different text and wildly different timings: a "docling-tuned"
+    result from this machine is not comparable to one from Linux CI without
+    knowing which engine actually ran.
+    """
+    import sys
+
+    if sys.platform == "darwin":
+        try:
+            import ocrmac  # noqa: F401
+            return "+ocrmac"
+        except ImportError:
+            pass
+    try:
+        import onnxruntime  # noqa: F401
+        import rapidocr  # noqa: F401
+        return "+rapidocr"
+    except ImportError:
+        pass
+    return "+ocr-unknown"
+
+
+def _docling_tuned_version():
+    return _version("docling") + _ocr_engine_suffix()
+
+
 @runner("docling-tuned")
 def run_docling_tuned(pdf_path, paper_id, sha256):
     started = time.time()
     result = tuned_converter().convert(str(pdf_path))
     doc = result.document.export_to_dict()
     return ir_from_docling_dict(doc, paper_id, sha256, time.time() - started,
-                                "docling-tuned", _version("docling"))
+                                "docling-tuned", _docling_tuned_version())
 
 
 # ----------------------------------------------------------------- pdfjs-node
@@ -501,3 +546,14 @@ def _pdfjs_version():
         return f"pdfjs-dist=={package['version']}"
     except Exception:
         return "pdfjs-dist==unknown"
+
+
+# The runner_version a fresh run would produce right now, without actually
+# running the extractor. cmd_run uses this to detect a library upgrade (e.g.
+# a docling bump, or an OCR engine change) and refuse a stale cache hit.
+RUNNER_VERSIONS = {
+    "pdfplumber": lambda: _version("pdfplumber"),
+    "docling-default": lambda: _version("docling"),
+    "docling-tuned": _docling_tuned_version,
+    "pdfjs-node": _pdfjs_version,
+}

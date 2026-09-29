@@ -51,13 +51,19 @@ def cmd_run(args):
                 record = json.loads(line)
                 done[record["paper_id"]] = record
 
+    # Keyed on sha256 AND runner_version: a library upgrade (docling bump, OCR
+    # engine change) must invalidate the cache instead of silently replaying
+    # stale results, which was v1's cache failure.
+    current_version = runners.RUNNER_VERSIONS[args.runner]()
+
     directory = manifest.corpus_dir()
     written = 0
     with out_path.open("w") as fh:
         for entry in entries:
             paper_id = pathlib.Path(entry["filename"]).stem
             cached = done.get(paper_id)
-            if cached and cached["pdf_sha256"] == entry["sha256"] and not args.force:
+            if (cached and cached["pdf_sha256"] == entry["sha256"]
+                    and cached.get("runner_version") == current_version and not args.force):
                 fh.write(json.dumps(cached) + "\n")
                 continue
             try:
