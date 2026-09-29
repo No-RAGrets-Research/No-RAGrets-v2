@@ -59,9 +59,21 @@ def score(results_by_runner, floor=FLOOR_RUNNER):
         arithmetic_checked = sum(p["arithmetic"]["checked"] for p in per_paper.values())
         arithmetic_passed = sum(p["arithmetic"]["passed"] for p in per_paper.values())
 
+        # Imported baselines carry wall_seconds == 0.0 by design (importing a
+        # pre-existing JSON times no conversion). Render that as "no data"
+        # rather than a flattering 0.00s/page. A runner with a mix of timed
+        # and untimed papers keeps its mean; only the all-zero case goes dark.
+        wall_seconds_values = [p["cost"]["wall_seconds"] for p in per_paper.values()]
+        all_untimed = bool(wall_seconds_values) and all(w == 0 for w in wall_seconds_values)
+
         scored["runners"][runner] = {
             "papers": len(per_paper),
             "coverage": {
+                # Coverage can only be computed for papers that also exist in
+                # the floor runner's results, which may be fewer than "papers"
+                # above. Recording it here lets the report show both counts
+                # side by side instead of hiding the mismatch.
+                "papers": len(covered),
                 "median_page_ratio": _mean([c["median_page_ratio"] for c in covered]),
                 "dropped_page_count": sum(c["dropped_page_count"] for c in covered),
                 "chars_total": sum(c["chars_total"] for c in covered),
@@ -93,7 +105,8 @@ def score(results_by_runner, floor=FLOOR_RUNNER):
                 "straddling_chunks": sum(p["chunks"]["straddling_chunks"] for p in per_paper.values()),
             },
             "cost": {
-                "seconds_per_page": _mean([p["cost"]["seconds_per_page"] for p in per_paper.values()]),
+                "seconds_per_page": None if all_untimed else
+                    _mean([p["cost"]["seconds_per_page"] for p in per_paper.values()]),
             },
         }
 
@@ -159,19 +172,20 @@ def render(scored):
         "pdfjs 2 — reading that as \"docling detects structure better\" would be an "
         "artifact of the classifier, not a measurement.",
         "",
-        "Caveat: read `dropped pages` alongside `cov. median`, never the median alone. "
-        "Measured: `docling-default` had a median page ratio of 1.002 while its total "
+        "Caveat: read `dropped pages` alongside `cov. mean-of-medians`, never that figure "
+        "alone. Measured: `docling-default` had a median page ratio of 1.002 while its total "
         "characters were 0.909x the floor, because it lost one whole page rather than "
-        "degrading uniformly. The median alone hides that entirely.",
+        "degrading uniformly. The mean-of-medians alone hides that entirely.",
         "",
-        "| runner | papers | cov. median | dropped pages | chars | order monotonic | "
-        "midword | sections/6 | tables | empty cells | arith checked | arith pass | "
-        "chunks | orphans | s/page |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| runner | papers | cov. papers | cov. mean-of-medians | dropped pages | chars | "
+        "order monotonic | midword | sections/6 | tables | empty cells | arith checked | "
+        "arith pass | chunks | orphans | s/page |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for runner, s in scored["runners"].items():
         lines.append(
-            f"| `{runner}` | {s['papers']} | {_cell(s['coverage']['median_page_ratio'])} | "
+            f"| `{runner}` | {s['papers']} | {s['coverage']['papers']} | "
+            f"{_cell(s['coverage']['median_page_ratio'])} | "
             f"{s['coverage']['dropped_page_count']} | {s['coverage']['chars_total']} | "
             f"{_cell(s['reading_order']['monotonic_fraction'])} | "
             f"{s['reading_order']['blocks_ending_midword']} | "
@@ -182,7 +196,7 @@ def render(scored):
         )
 
     lines += ["", "## Cross-runner agreement", "",
-              "| pair | papers | median 3-gram agreement |", "|---|---|---|"]
+              "| pair | papers | mean of per-paper medians |", "|---|---|---|"]
     for pair in scored["pairs"]:
         lines.append(f"| {pair['pair']} | {pair['papers']} | {_cell(pair['median_agreement'])} |")
 
@@ -193,7 +207,9 @@ def render(scored):
 
     lines += ["", "## Chunk straddling", ""]
     for runner, s in scored["runners"].items():
-        lines.append(f"- `{runner}`: {s['chunks']['straddling_chunks']} chunks cross a section header")
+        median_chunk = _cell(s["chunks"]["median_chars"], 0)
+        lines.append(f"- `{runner}`: {s['chunks']['straddling_chunks']} chunks cross a "
+                      f"section header; median chunk {median_chunk} chars")
     lines.append("")
     return "\n".join(lines)
 
