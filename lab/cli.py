@@ -76,6 +76,46 @@ def cmd_run(args):
     return 0
 
 
+def cmd_compare(args):
+    from lab import report
+
+    scored = report.write(floor=args.floor)
+    print(f"wrote {report.REPORT_PATH}")
+    for runner, summary in scored["runners"].items():
+        rate = summary["arithmetic"]["pass_rate"]
+        rate_text = "—" if rate is None else f"{rate:.3f}"
+        print(f"  {runner:16} {summary['papers']:3d} papers  "
+              f"arith {summary['arithmetic']['checked']:4d} checked, pass {rate_text}  "
+              f"dropped pages {summary['coverage']['dropped_page_count']}")
+    return 0
+
+
+def cmd_import_baseline(args):
+    """Import DoclingDocument JSON produced earlier by a bare DocumentConverter."""
+    from lab import manifest, runners
+
+    source = pathlib.Path(args.directory).expanduser()
+    entries = manifest.load()
+    RESULTS_DIR.mkdir(exist_ok=True)
+    out_path = RESULTS_DIR / "docling-default.jsonl"
+
+    written = skipped = 0
+    with out_path.open("w") as fh:
+        for entry in entries:
+            stem = pathlib.Path(entry["filename"]).stem
+            json_path = source / f"{stem}.json"
+            if not json_path.exists():
+                print(f"MISSING  {stem}.json")
+                skipped += 1
+                continue
+            record = runners.import_docling_json(json_path, stem, entry["sha256"])
+            fh.write(json.dumps(record) + "\n")
+            written += 1
+
+    print(f"imported {written} baselines to {out_path} ({skipped} missing)")
+    return 0 if skipped == 0 else 1
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="python -m lab")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +129,14 @@ def build_parser():
     r.add_argument("--limit", type=int, default=0, help="only the first N papers")
     r.add_argument("--force", action="store_true", help="ignore cached results")
     r.set_defaults(func=cmd_run)
+
+    c = sub.add_parser("compare", help="aggregate results into results/REPORT.md")
+    c.add_argument("--floor", default="pdfplumber")
+    c.set_defaults(func=cmd_compare)
+
+    i = sub.add_parser("import-baseline", help="import existing DoclingDocument JSON as the baseline")
+    i.add_argument("directory", help="e.g. ../No-RAGrets-Master/data/docling_json")
+    i.set_defaults(func=cmd_import_baseline)
 
     return parser
 

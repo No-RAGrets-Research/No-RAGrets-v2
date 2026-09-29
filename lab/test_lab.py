@@ -516,6 +516,27 @@ def test_chunk_health_detects_a_chunk_spanning_a_section_header():
     assert metrics.chunk_health(candidate)["straddling_chunks"] == 1
 
 
+from lab import report
+
+
+def test_render_produces_a_row_per_runner_and_no_composite_score():
+    floor = two_page_ir("x" * 400, "y" * 400, runner_name="pdfplumber")
+    better = two_page_ir("x" * 400, "y" * 400, runner_name="docling-tuned")
+    worse = two_page_ir("x" * 400, "", runner_name="pdfjs-node")
+    results = {
+        "pdfplumber": {"p": floor},
+        "docling-tuned": {"p": better},
+        "pdfjs-node": {"p": worse},
+    }
+    scored = report.score(results)
+    text = report.render(scored)
+    for name in results:
+        assert name in text, f"{name} missing from the report"
+    assert "dropped" in text.lower()
+    assert "overall score" not in text.lower(), "no composite score, ever"
+    assert scored["runners"]["pdfjs-node"]["coverage"]["dropped_page_count"] == 1
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.
