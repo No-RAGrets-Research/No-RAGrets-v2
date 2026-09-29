@@ -211,6 +211,64 @@ def test_pdfplumber_runner_smoke():
     assert "Methods" in " ".join(b["text"] for b in out["blocks"])
 
 
+def docling_dict():
+    """A hand-built DoclingDocument-shaped dict: bottom-left origin, one table."""
+    return {
+        "schema_name": "DoclingDocument",
+        "version": "1.8.0",
+        "pages": {"1": {"page_no": 1, "size": {"width": 200.0, "height": 200.0}}},
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "section_header", "text": "Methods",
+             "prov": [{"page_no": 1, "bbox": {"l": 10, "t": 190, "r": 90, "b": 180,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+            {"self_ref": "#/texts/1", "label": "text", "text": "We grew cultures.",
+             "prov": [{"page_no": 1, "bbox": {"l": 10, "t": 170, "r": 90, "b": 160,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+            {"self_ref": "#/texts/2", "label": "caption", "text": "Table 1. Yields.",
+             "prov": [{"page_no": 1, "bbox": {"l": 10, "t": 150, "r": 90, "b": 140,
+                                              "coord_origin": "BOTTOMLEFT"}}]},
+        ],
+        "tables": [
+            {"self_ref": "#/tables/0", "label": "table",
+             "captions": [{"$ref": "#/texts/2"}],
+             "prov": [{"page_no": 1, "bbox": {"l": 10, "t": 130, "r": 90, "b": 100,
+                                              "coord_origin": "BOTTOMLEFT"}}],
+             "data": {"num_rows": 3, "num_cols": 2,
+                      "grid": [[{"text": "label"}, {"text": "n"}],
+                               [{"text": "a"}, {"text": "2"}],
+                               [{"text": "Total"}, {"text": "2"}]]}},
+        ],
+    }
+
+
+def test_ir_from_docling_dict_maps_labels_and_flips_coordinates():
+    out = runners.ir_from_docling_dict(
+        docling_dict(), "fixture", "0" * 64, 1.0, "docling-default", "docling==2.60.0",
+    )
+    ir.validate(out)
+    kinds = [b["kind"] for b in out["blocks"]]
+    assert "section_header" in kinds and "paragraph" in kinds and "caption" in kinds, kinds
+    header = next(b for b in out["blocks"] if b["kind"] == "section_header")
+    # bottom-left t=190 on a 200-high page is 10 from the top
+    assert abs(header["bbox"][1] - 10) < 0.01, header
+    assert out["tables"][0]["caption"] == "Table 1. Yields."
+    assert out["tables"][0]["cells"][2] == ["Total", "2"]
+
+
+def test_ir_from_docling_dict_rebuilds_a_table_without_a_grid():
+    doc = docling_dict()
+    doc["tables"][0]["data"] = {
+        "num_rows": 2, "num_cols": 2,
+        "table_cells": [
+            {"text": "x", "start_row_offset_idx": 0, "start_col_offset_idx": 0},
+            {"text": "1", "start_row_offset_idx": 0, "start_col_offset_idx": 1},
+            {"text": "y", "start_row_offset_idx": 1, "start_col_offset_idx": 0},
+        ],
+    }
+    out = runners.ir_from_docling_dict(doc, "fixture", "0" * 64, 1.0, "d", "v")
+    assert out["tables"][0]["cells"] == [["x", "1"], ["y", ""]]
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.

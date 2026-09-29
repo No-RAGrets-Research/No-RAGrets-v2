@@ -261,3 +261,148 @@ def _version(package):
         return f"{package}=={version(package)}"
     except Exception:
         return f"{package}==unknown"
+
+
+# ------------------------------------------------------------------- docling
+
+# DoclingDocument labels -> our block kinds.
+DOCLING_LABEL_KIND = {
+    "title": "section_header",
+    "section_header": "section_header",
+    "caption": "caption",
+    "text": "paragraph",
+    "paragraph": "paragraph",
+    "list_item": "paragraph",
+    "footnote": "other",
+    "page_header": "other",
+    "page_footer": "other",
+    "formula": "other",
+    "code": "other",
+    "reference": "paragraph",
+}
+
+
+def _page_heights(doc):
+    pages = doc.get("pages") or {}
+    if isinstance(pages, dict):
+        items = pages.values()
+    else:
+        items = pages
+    heights = {}
+    for page in items:
+        number = page.get("page_no")
+        size = page.get("size") or {}
+        if number is not None:
+            heights[int(number)] = float(size.get("height") or 0.0)
+    return heights
+
+
+def _docling_prov(item, heights):
+    """Return (page, bbox) with bbox in top-down coordinates, or (None, None).
+
+    Docling reports bottom-left origin by default: t is the distance from the
+    bottom, so it must be flipped or every reading-order number is inverted.
+    """
+    prov = (item.get("prov") or [None])[0]
+    if not prov:
+        return None, None
+    page = prov.get("page_no")
+    box = prov.get("bbox") or {}
+    if not box or page is None:
+        return page, None
+    left, right = box.get("l"), box.get("r")
+    top, bottom = box.get("t"), box.get("b")
+    if None in (left, right, top, bottom):
+        return page, None
+    if (box.get("coord_origin") or "BOTTOMLEFT").upper() == "BOTTOMLEFT":
+        height = heights.get(int(page), 0.0)
+        top, bottom = height - top, height - bottom
+    if top > bottom:
+        top, bottom = bottom, top
+    return page, [float(left), float(top), float(right), float(bottom)]
+
+
+def _docling_cells(data):
+    grid = data.get("grid")
+    if grid:
+        return [[(cell or {}).get("text", "") or "" for cell in row] for row in grid]
+
+    cells = data.get("table_cells") or []
+    rows = data.get("num_rows") or max((c.get("end_row_offset_idx", 0) for c in cells), default=0)
+    cols = data.get("num_cols") or max((c.get("end_col_offset_idx", 0) for c in cells), default=0)
+    grid = [[""] * cols for _ in range(rows)]
+    for cell in cells:
+        r = cell.get("start_row_offset_idx", 0)
+        c = cell.get("start_col_offset_idx", 0)
+        if 0 <= r < rows and 0 <= c < cols:
+            grid[r][c] = cell.get("text", "") or ""
+    return grid
+
+
+def ir_from_docling_dict(doc, paper_id, sha256, wall_seconds, runner_name, runner_version):
+    heights = _page_heights(doc)
+    by_ref = {t.get("self_ref"): (t.get("text") or "") for t in doc.get("texts") or []}
+
+    items = []
+    for text_item in doc.get("texts") or []:
+        page, bbox = _docling_prov(text_item, heights)
+        body = text_item.get("text") or ""
+        if not body.strip() or page is None:
+            continue
+        kind = DOCLING_LABEL_KIND.get(text_item.get("label"), "other")
+        if kind == "paragraph":
+            # Docling labels many headers plainly "text"; re-check by content.
+            kind = classify(body)
+        items.append((page, bbox, {"page": int(page), "kind": kind, "text": body, "bbox": bbox}))
+
+    tables = []
+    for table_item in doc.get("tables") or []:
+        page, bbox = _docling_prov(table_item, heights)
+        if page is None:
+            continue
+        cells = _docling_cells(table_item.get("data") or {})
+        cols = max((len(row) for row in cells), default=0)
+        cells = [row + [""] * (cols - len(row)) for row in cells]
+        caption_refs = table_item.get("captions") or []
+        caption = next((by_ref.get(r.get("$ref")) for r in caption_refs if r.get("$ref") in by_ref), None)
+        tables.append({
+            "page": int(page), "rows": len(cells), "cols": cols,
+            "cells": cells, "caption": caption,
+        })
+        items.append((page, bbox, {"page": int(page), "kind": "table", "text": "", "bbox": bbox}))
+
+    def sort_key(entry):
+        page, bbox, _ = entry
+        top = bbox[1] if bbox else 0.0
+        left = bbox[0] if bbox else 0.0
+        return (int(page), round(top, 1), round(left, 1))
+
+    blocks = [block for _, _, block in sorted(items, key=sort_key)]
+    pages = max(heights) if heights else max((b["page"] for b in blocks), default=1)
+    return finish(paper_id, runner_name, runner_version, sha256,
+                  int(pages), wall_seconds, blocks, tables)
+
+
+def import_docling_json(json_path, paper_id, sha256):
+    """Import a DoclingDocument JSON produced earlier by a bare DocumentConverter.
+
+    This is how the baseline costs zero compute: the 47 files in
+    No-RAGrets-Master/data/docling_json/ came from
+    pipeline/kg_gen_pipeline/core/pdf_converter.py:44 at docling 2.60.0.
+    wall_seconds is 0.0 because the conversion is not being timed here.
+    """
+    doc = json.loads(pathlib.Path(json_path).read_text())
+    return ir_from_docling_dict(doc, paper_id, sha256, 0.0,
+                                "docling-default", "docling==2.60.0 (imported)")
+
+
+@runner("docling-default")
+def run_docling_default(pdf_path, paper_id, sha256):
+    """Exactly what v1 ran: bare DocumentConverter(), every option default."""
+    from docling.document_converter import DocumentConverter
+
+    started = time.time()
+    result = DocumentConverter().convert(str(pdf_path))
+    doc = result.document.export_to_dict()
+    return ir_from_docling_dict(doc, paper_id, sha256, time.time() - started,
+                                "docling-default", _version("docling"))
