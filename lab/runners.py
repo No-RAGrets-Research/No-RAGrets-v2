@@ -316,6 +316,10 @@ def _docling_prov(item, heights):
         return page, None
     if (box.get("coord_origin") or "BOTTOMLEFT").upper() == "BOTTOMLEFT":
         height = heights.get(int(page), 0.0)
+        if not height:
+            # Without the page height there is no coordinate frame to flip
+            # into, so the honest answer is no bbox.
+            return page, None
         top, bottom = height - top, height - bottom
     if top > bottom:
         top, bottom = bottom, top
@@ -373,7 +377,10 @@ def ir_from_docling_dict(doc, paper_id, sha256, wall_seconds, runner_name, runne
 
     def sort_key(entry):
         page, bbox, _ = entry
-        top = bbox[1] if bbox else 0.0
+        # A block with no provenance has an unknown position; sorting it last
+        # (not at 0.0, which is page-top) means it cannot displace the blocks
+        # whose position is known.
+        top = bbox[1] if bbox else float("inf")
         left = bbox[0] if bbox else 0.0
         return (int(page), round(top, 1), round(left, 1))
 

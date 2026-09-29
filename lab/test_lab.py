@@ -269,6 +269,14 @@ def test_ir_from_docling_dict_rebuilds_a_table_without_a_grid():
     assert out["tables"][0]["cells"] == [["x", "1"], ["y", ""]]
 
 
+def test_ir_from_docling_dict_omits_bbox_for_a_page_missing_its_height():
+    doc = docling_dict()
+    doc["texts"][1]["prov"][0]["page_no"] = 2  # page 2 is absent from "pages"
+    out = runners.ir_from_docling_dict(doc, "fixture", "0" * 64, 1.0, "d", "v")
+    block = next(b for b in out["blocks"] if b["text"] == "We grew cultures.")
+    assert block["bbox"] is None, block
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.
