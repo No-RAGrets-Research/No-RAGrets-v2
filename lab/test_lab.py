@@ -277,6 +277,23 @@ def test_ir_from_docling_dict_omits_bbox_for_a_page_missing_its_height():
     assert block["bbox"] is None, block
 
 
+def test_tuned_converter_sets_ocr_and_accurate_tables():
+    """Guards the configuration, not the conversion — building a converter is cheap,
+    converting a PDF is not."""
+    try:
+        converter = runners.tuned_converter()
+    except ImportError as e:
+        raise AssertionError(f"docling not installed or backend path wrong: {e}")
+    from docling.datamodel.base_models import InputFormat
+
+    option = converter.format_to_options[InputFormat.PDF]
+    pipeline = option.pipeline_options
+    assert pipeline.do_ocr is True
+    assert pipeline.do_table_structure is True
+    assert pipeline.table_structure_options.mode.value == "accurate", pipeline.table_structure_options.mode
+    assert option.backend is not None, "backend must be explicit, never the default"
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.

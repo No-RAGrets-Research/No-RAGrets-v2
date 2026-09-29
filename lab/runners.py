@@ -413,3 +413,41 @@ def run_docling_default(pdf_path, paper_id, sha256):
     doc = result.document.export_to_dict()
     return ir_from_docling_dict(doc, paper_id, sha256, time.time() - started,
                                 "docling-default", _version("docling"))
+
+
+def tuned_converter():
+    """OCR on, accurate table structure, backend pinned explicitly.
+
+    The explicit backend is not optional. Docling 2.123.0 made threaded
+    docling-parse the default (PR #3764) and that default is what drops most of
+    a scanned PDF's OCR text layer (issue #4357) and runs ~4x slower on CPU
+    (issue #4174). Both were still open on 2026-09-28. Passing the backend here
+    means this runner behaves the same if the pin ever moves.
+    """
+    from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    options = PdfPipelineOptions()
+    options.do_ocr = True
+    options.do_table_structure = True
+    options.table_structure_options.mode = TableFormerMode.ACCURATE
+    options.table_structure_options.do_cell_matching = True
+    options.generate_page_images = False   # nothing here looks at images
+
+    return DocumentConverter(format_options={
+        InputFormat.PDF: PdfFormatOption(
+            pipeline_options=options,
+            backend=DoclingParseDocumentBackend,
+        )
+    })
+
+
+@runner("docling-tuned")
+def run_docling_tuned(pdf_path, paper_id, sha256):
+    started = time.time()
+    result = tuned_converter().convert(str(pdf_path))
+    doc = result.document.export_to_dict()
+    return ir_from_docling_dict(doc, paper_id, sha256, time.time() - started,
+                                "docling-tuned", _version("docling"))
