@@ -160,9 +160,9 @@ TOLERANCE_RELATIVE = 0.01
 TOLERANCE_ABSOLUTE = 0.01
 
 # Row 0 is assumed to be a header row, and column 0 a label column.
-# Known ceiling: a table with two header rows will have its first data row read
-# as a header and excluded from the sum. Upgrade path is detecting header depth
-# by numeric density per row.
+# Known ceiling: a table with two header rows will silently include the second
+# header row (year sub-headers like "2019", "2020") in the sum as if it were data,
+# inflating totals. Upgrade path is detecting header depth by numeric density per row.
 HEADER_ROWS = 1
 LABEL_COLS = 1
 
@@ -175,7 +175,7 @@ def parse_number(raw):
     if not text:
         return None
     text = text.replace("−", "-").replace("–", "-").replace("—", "-")
-    text = text.replace("%", "").replace(" ", "").replace(" ", "")
+    text = text.replace("%", "").replace(" ", "").replace("\xa0", "")
     negative = text.startswith("(") and text.endswith(")")
     text = text.strip("()").replace(",", "")
     if text in ("", "-", "."):

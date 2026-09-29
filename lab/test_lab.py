@@ -426,6 +426,10 @@ def test_parse_number_handles_the_formats_papers_actually_use():
     assert metrics.parse_number(None) is None
 
 
+def test_parse_number_handles_non_breaking_spaces():
+    assert metrics.parse_number("1\xa0234") == 1234.0
+
+
 def test_table_arithmetic_passes_a_table_that_reconciles():
     out = metrics.table_arithmetic(ir_with_table(GOOD_TABLE))
     assert out["checked"] == 2, out          # the yield column and the cost column
@@ -485,7 +489,7 @@ def test_chunk_health_flags_orphans_and_midsentence_starts():
         "chunks": [
             {"id": 0, "text": "tiny", "block_ids": [1], "section": "Methods", "chars": 4},
             {"id": 1, "text": "and this one starts mid sentence because it is lowercase and has many more words to exceed the one hundred character threshold that marks an orphan chunk in the ingestion lab",
-             "block_ids": [1], "section": "Methods", "chars": 155},
+             "block_ids": [1], "section": "Methods", "chars": 174},
         ],
     }
     out = metrics.chunk_health(candidate)
@@ -506,7 +510,7 @@ def test_chunk_health_detects_a_chunk_spanning_a_section_header():
         ],
         "chunks": [
             {"id": 0, "text": "Before the header. After the header.", "block_ids": [0, 2],
-             "section": "(front matter)", "chars": 35},
+             "section": "(front matter)", "chars": 36},
         ],
     }
     assert metrics.chunk_health(candidate)["straddling_chunks"] == 1
