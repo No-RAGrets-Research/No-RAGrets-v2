@@ -136,7 +136,15 @@ def render(scored):
         "coverage row is 1.0 by definition.",
         "",
         "No column is a quality score and no column should be averaged with another. "
-        "Read `arith pass` first — it is the only column that can be flatly wrong.",
+        "When `arith checked` is nonzero, read `arith pass` first — it is the only "
+        "column that can be flatly wrong.",
+        "",
+        "Caveat: on this corpus, `arith checked` reads 0 across all runners because "
+        "these papers contain literature-comparison tables with quantity names like "
+        "`Total biomass (g/L)` rather than aggregate-total rows or columns. This is not "
+        "a failure of any runner; it is the honest outcome of a label-free metric on a "
+        "corpus without checkable totals. The measurement weight falls to coverage, "
+        "dropped pages, and cross-runner agreement.",
         "",
         "Caveat: `order monotonic` is not evidence of correct reading order. It reads 1.000 "
         "for every runner because each runner already emits blocks in sorted order (the "

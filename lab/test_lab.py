@@ -462,6 +462,19 @@ def test_table_arithmetic_reports_nothing_checkable_as_none():
     assert out["pass_rate"] is None
 
 
+def test_table_arithmetic_ignores_quantity_names_containing_total():
+    # A column header like "Total biomass (g/L)" CONTAINS "Total" but is a quantity
+    # name, not an aggregate. Summing unrelated numeric cells beside it was a
+    # false-positive failure mode on real papers. Whole-cell matching stops this.
+    cells = [
+        ["Ref.", "Bacteria strain", "Total biomass (g/L)", "Cell density"],
+        ["[1]", "E. coli", "250", "0.3"],
+        ["[2]", "B. subtilis", "180", "0.5"],
+    ]
+    out = metrics.table_arithmetic(ir_with_table(cells))
+    assert out["checked"] == 0, out  # "Total biomass (g/L)" is not a whole-cell match
+
+
 def test_table_structure_measures_empty_density():
     sparse = [["a", "", ""], ["", "", ""]]
     out = metrics.table_structure(ir_with_table(sparse))

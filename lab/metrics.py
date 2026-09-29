@@ -152,7 +152,10 @@ def cost(candidate):
 
 # ------------------------------------------------------------------- tables
 
-TOTAL_WORD = re.compile(r"\b(total|totals|sum|sums|overall)\b", re.I)
+# "Total" as a whole cell means an aggregate. A header merely CONTAINING it
+# ("Total biomass productivity (g/L/h)") is a quantity name, and summing the
+# unrelated columns beside it produced false failures on real papers.
+TOTAL_LABEL = re.compile(r"^\s*(total|totals|sum|sums|overall)\s*[:.]?\s*$", re.I)
 
 # 1% relative, or 0.01 absolute when the total is near zero. Papers round their
 # own published totals, so a tighter tolerance would fail on correct tables.
@@ -193,7 +196,7 @@ def _total_series(table):
 
     for r in range(HEADER_ROWS, rows):
         labels = [cells[r][c] or "" for c in range(min(LABEL_COLS + 1, cols))]
-        if not any(TOTAL_WORD.search(label) for label in labels):
+        if not any(TOTAL_LABEL.match(label) for label in labels):
             continue
         for c in range(cols):
             total = parse_number(cells[r][c])
@@ -205,7 +208,7 @@ def _total_series(table):
 
     for c in range(LABEL_COLS, cols):
         labels = [cells[r][c] or "" for r in range(min(HEADER_ROWS + 1, rows))]
-        if not any(TOTAL_WORD.search(label) for label in labels):
+        if not any(TOTAL_LABEL.match(label) for label in labels):
             continue
         for r in range(rows):
             total = parse_number(cells[r][c])
