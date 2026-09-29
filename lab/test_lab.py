@@ -6,10 +6,12 @@ the metrics are pure functions and a PDF is not needed to test arithmetic.
 import pathlib
 import copy
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lab import ir
+from lab import manifest
 
 
 def good_ir():
@@ -101,6 +103,44 @@ def test_chars_per_page_counts_only_text_blocks():
     counts = ir.chars_per_page(good_ir())
     assert counts[1] == len("Methods") + len("We did the thing.")
     assert counts[2] == 0
+
+
+def test_verify_reports_missing_extra_and_changed():
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "kept.pdf").write_bytes(b"%PDF-1.4 kept")
+        (d / "surprise.pdf").write_bytes(b"%PDF-1.4 surprise")
+        entries = [
+            {"filename": "kept.pdf", "sha256": manifest.sha256_file(d / "kept.pdf"),
+             "pages": 1, "chars_text_layer": 0, "scanned": True, "doi": None},
+            {"filename": "gone.pdf", "sha256": "f" * 64,
+             "pages": 1, "chars_text_layer": 0, "scanned": True, "doi": None},
+        ]
+        result = manifest.verify(entries=entries, directory=d)
+        assert result["missing"] == ["gone.pdf"], result
+        assert result["extra"] == ["surprise.pdf"], result
+        assert result["changed"] == [], result
+        assert result["ok"] is False
+
+
+def test_verify_detects_a_changed_file():
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "a.pdf").write_bytes(b"%PDF-1.4 original")
+        entries = [{"filename": "a.pdf", "sha256": "0" * 64,
+                    "pages": 1, "chars_text_layer": 0, "scanned": True, "doi": None}]
+        result = manifest.verify(entries=entries, directory=d)
+        assert result["changed"] == ["a.pdf"], result
+        assert result["ok"] is False
+
+
+def test_verify_passes_on_an_exact_match():
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "a.pdf").write_bytes(b"%PDF-1.4 original")
+        entries = [{"filename": "a.pdf", "sha256": manifest.sha256_file(d / "a.pdf"),
+                    "pages": 1, "chars_text_layer": 0, "scanned": True, "doi": None}]
+        assert manifest.verify(entries=entries, directory=d)["ok"] is True
 
 
 def main():
