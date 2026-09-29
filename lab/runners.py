@@ -462,3 +462,42 @@ def run_docling_tuned(pdf_path, paper_id, sha256):
     doc = result.document.export_to_dict()
     return ir_from_docling_dict(doc, paper_id, sha256, time.time() - started,
                                 "docling-tuned", _version("docling"))
+
+
+# ----------------------------------------------------------------- pdfjs-node
+
+PDFJS_SCRIPT = pathlib.Path(__file__).parent / "pdfjs_runner.mjs"
+
+
+@runner("pdfjs-node")
+def run_pdfjs(pdf_path, paper_id, sha256):
+    """The extractor the shipped app would use: pdf.js, in Node instead of a browser.
+
+    Emits no tables at all — pdf.js has no table model. That is a real capability
+    difference and the table metrics are what will price it.
+    """
+    started = time.time()
+    finished = subprocess.run(
+        ["node", str(PDFJS_SCRIPT), str(pdf_path)],
+        capture_output=True, text=True, check=False,
+    )
+    if finished.returncode != 0:
+        raise RuntimeError(f"pdfjs_runner.mjs exited {finished.returncode}: {finished.stderr[-500:]}")
+    payload = json.loads(finished.stdout)
+
+    blocks = []
+    for page in payload["pages"]:
+        for block in group_lines(page["lines"]):
+            block["page"] = int(page["page"])
+            blocks.append(block)
+
+    return finish(paper_id, "pdfjs-node", _pdfjs_version(), sha256,
+                  len(payload["pages"]), time.time() - started, blocks, [])
+
+
+def _pdfjs_version():
+    try:
+        package = json.loads(pathlib.Path("node_modules/pdfjs-dist/package.json").read_text())
+        return f"pdfjs-dist=={package['version']}"
+    except Exception:
+        return "pdfjs-dist==unknown"

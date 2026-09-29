@@ -296,6 +296,18 @@ def test_tuned_converter_sets_ocr_and_accurate_tables():
     assert option.backend is DoclingParseV4DocumentBackend, "backend must be pinned to v4, explicitly"
 
 
+def test_pdfjs_runner_smoke():
+    import shutil
+    if not shutil.which("node"):
+        print("SKIP test_pdfjs_runner_smoke: node not installed")
+        return
+    out = runners.RUNNERS["pdfjs-node"](pathlib.Path("fixtures/tiny.pdf"), "tiny", "0" * 64)
+    ir.validate(out)
+    assert out["pages"] == 1
+    assert "Methods" in " ".join(b["text"] for b in out["blocks"])
+    assert out["tables"] == [], "pdf.js has no table model; empty tables is the finding, not a bug"
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.
