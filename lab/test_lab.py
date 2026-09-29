@@ -284,6 +284,7 @@ def test_tuned_converter_sets_ocr_and_accurate_tables():
         converter = runners.tuned_converter()
     except ImportError as e:
         raise AssertionError(f"docling not installed or backend path wrong: {e}")
+    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
     from docling.datamodel.base_models import InputFormat
 
     option = converter.format_to_options[InputFormat.PDF]
@@ -291,7 +292,8 @@ def test_tuned_converter_sets_ocr_and_accurate_tables():
     assert pipeline.do_ocr is True
     assert pipeline.do_table_structure is True
     assert pipeline.table_structure_options.mode.value == "accurate", pipeline.table_structure_options.mode
-    assert option.backend is not None, "backend must be explicit, never the default"
+    assert pipeline.ocr_options.force_full_page_ocr is True, "the one real variable this runner adds"
+    assert option.backend is DoclingParseV4DocumentBackend, "backend must be pinned to v4, explicitly"
 
 
 def main():

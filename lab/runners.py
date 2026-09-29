@@ -416,15 +416,25 @@ def run_docling_default(pdf_path, paper_id, sha256):
 
 
 def tuned_converter():
-    """OCR on, accurate table structure, backend pinned explicitly.
+    """OCR every page, accurate table structure, backend pinned explicitly.
 
-    The explicit backend is not optional. Docling 2.123.0 made threaded
-    docling-parse the default (PR #3764) and that default is what drops most of
-    a scanned PDF's OCR text layer (issue #4357) and runs ~4x slower on CPU
-    (issue #4174). Both were still open on 2026-09-28. Passing the backend here
-    means this runner behaves the same if the pin ever moves.
+    On docling 2.60.0, do_ocr, do_table_structure, the accurate table mode,
+    do_cell_matching, and generate_page_images=False are already the defaults.
+    The one genuine variable this runner adds is force_full_page_ocr=True:
+    it OCRs every page instead of trusting the PDF's embedded text layer,
+    which is the only OCR question still open on a corpus that is mostly
+    born-digital (median 4178 chars/page) with one fully scanned paper.
+
+    The explicit backend is not optional, but it is not a downgrade either:
+    DoclingParseV4DocumentBackend is also today's default. Naming it here is
+    version-bump protection, not a change of parser. Docling 2.123.0 made
+    threaded docling-parse the default (PR #3764), which is what drops most
+    of a scanned PDF's OCR text layer (issue #4357) and runs ~4x slower on
+    CPU (issue #4174) -- both still open on 2026-09-28. Passing the backend
+    explicitly means this runner keeps using the parser we chose even if
+    that default changes out from under us.
     """
-    from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -435,11 +445,12 @@ def tuned_converter():
     options.table_structure_options.mode = TableFormerMode.ACCURATE
     options.table_structure_options.do_cell_matching = True
     options.generate_page_images = False   # nothing here looks at images
+    options.ocr_options.force_full_page_ocr = True
 
     return DocumentConverter(format_options={
         InputFormat.PDF: PdfFormatOption(
             pipeline_options=options,
-            backend=DoclingParseDocumentBackend,
+            backend=DoclingParseV4DocumentBackend,
         )
     })
 
