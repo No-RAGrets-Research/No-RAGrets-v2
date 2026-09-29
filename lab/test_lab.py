@@ -398,6 +398,120 @@ def test_pdfjs_runner_smoke():
     assert out["tables"] == [], "pdf.js has no table model; empty tables is the finding, not a bug"
 
 
+def ir_with_table(cells, rows=None, cols=None):
+    rows = rows if rows is not None else len(cells)
+    cols = cols if cols is not None else (len(cells[0]) if cells else 0)
+    return {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "blocks": [], "chunks": [],
+        "tables": [{"page": 1, "rows": rows, "cols": cols, "cells": cells, "caption": None}],
+    }
+
+
+GOOD_TABLE = [
+    ["condition", "yield", "cost"],
+    ["a", "10", "1.5"],
+    ["b", "15", "2.5"],
+    ["Total", "25", "4.0"],
+]
+
+
+def test_parse_number_handles_the_formats_papers_actually_use():
+    assert metrics.parse_number("1,234") == 1234.0
+    assert metrics.parse_number("(12.5)") == -12.5
+    assert metrics.parse_number("−3") == -3.0
+    assert metrics.parse_number("45%") == 45.0
+    assert metrics.parse_number("n/a") is None
+    assert metrics.parse_number("") is None
+    assert metrics.parse_number(None) is None
+
+
+def test_table_arithmetic_passes_a_table_that_reconciles():
+    out = metrics.table_arithmetic(ir_with_table(GOOD_TABLE))
+    assert out["checked"] == 2, out          # the yield column and the cost column
+    assert out["passed"] == 2, out
+    assert out["pass_rate"] == 1.0
+
+
+def test_table_arithmetic_fails_a_corrupted_cell():
+    broken = [row[:] for row in GOOD_TABLE]
+    broken[1][1] = "100"                     # 100 + 15 != 25
+    out = metrics.table_arithmetic(ir_with_table(broken))
+    assert out["passed"] < out["checked"], out
+    assert out["failures"], "a failing check must be reported, not silently dropped"
+
+
+def test_table_arithmetic_checks_a_total_column_too():
+    cells = [
+        ["site", "q1", "q2", "Total"],
+        ["north", "2", "3", "5"],
+        ["south", "4", "1", "5"],
+    ]
+    out = metrics.table_arithmetic(ir_with_table(cells))
+    assert out["checked"] == 2, out
+    assert out["passed"] == 2, out
+
+
+def test_table_arithmetic_reports_nothing_checkable_as_none():
+    out = metrics.table_arithmetic(ir_with_table([["a", "b"], ["c", "d"]]))
+    assert out["checked"] == 0
+    assert out["pass_rate"] is None
+
+
+def test_table_structure_measures_empty_density():
+    sparse = [["a", "", ""], ["", "", ""]]
+    out = metrics.table_structure(ir_with_table(sparse))
+    assert out["tables"] == 1
+    assert out["empty_cell_ratio"] > 0.8, out
+    dense = metrics.table_structure(ir_with_table(GOOD_TABLE))
+    assert dense["empty_cell_ratio"] == 0.0
+    assert dense["numeric_cell_ratio"] > 0.4, dense
+
+
+def test_table_structure_on_a_runner_with_no_tables():
+    out = metrics.table_structure(two_page_ir("a", "b"))
+    assert out["tables"] == 0
+    assert out["empty_cell_ratio"] is None
+
+
+def test_chunk_health_flags_orphans_and_midsentence_starts():
+    candidate = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [],
+        "blocks": [
+            {"page": 1, "kind": "section_header", "text": "Methods", "bbox": None, "order": 0},
+            {"page": 1, "kind": "paragraph", "text": "long enough sentence here", "bbox": None, "order": 1},
+        ],
+        "chunks": [
+            {"id": 0, "text": "tiny", "block_ids": [1], "section": "Methods", "chars": 4},
+            {"id": 1, "text": "and this one starts mid sentence because it is lowercase and has many more words to exceed the one hundred character threshold that marks an orphan chunk in the ingestion lab",
+             "block_ids": [1], "section": "Methods", "chars": 155},
+        ],
+    }
+    out = metrics.chunk_health(candidate)
+    assert out["orphan_chunks"] == 1, out
+    assert out["midsentence_starts"] == 2, out
+    assert out["straddling_chunks"] == 0, out
+    assert out["median_chars"] is not None
+
+
+def test_chunk_health_detects_a_chunk_spanning_a_section_header():
+    candidate = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [],
+        "blocks": [
+            {"page": 1, "kind": "paragraph", "text": "Before the header.", "bbox": None, "order": 0},
+            {"page": 1, "kind": "section_header", "text": "Results", "bbox": None, "order": 1},
+            {"page": 1, "kind": "paragraph", "text": "After the header.", "bbox": None, "order": 2},
+        ],
+        "chunks": [
+            {"id": 0, "text": "Before the header. After the header.", "block_ids": [0, 2],
+             "section": "(front matter)", "chars": 35},
+        ],
+    }
+    assert metrics.chunk_health(candidate)["straddling_chunks"] == 1
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.

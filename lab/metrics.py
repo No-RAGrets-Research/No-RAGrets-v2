@@ -148,3 +148,169 @@ def cost(candidate):
         "wall_seconds": candidate["wall_seconds"],
         "seconds_per_page": (candidate["wall_seconds"] / pages) if pages else None,
     }
+
+
+# ------------------------------------------------------------------- tables
+
+TOTAL_WORD = re.compile(r"\b(total|totals|sum|sums|overall)\b", re.I)
+
+# 1% relative, or 0.01 absolute when the total is near zero. Papers round their
+# own published totals, so a tighter tolerance would fail on correct tables.
+TOLERANCE_RELATIVE = 0.01
+TOLERANCE_ABSOLUTE = 0.01
+
+# Row 0 is assumed to be a header row, and column 0 a label column.
+# Known ceiling: a table with two header rows will have its first data row read
+# as a header and excluded from the sum. Upgrade path is detecting header depth
+# by numeric density per row.
+HEADER_ROWS = 1
+LABEL_COLS = 1
+
+
+def parse_number(raw):
+    """Parse the number formats papers actually print, or return None."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+    text = text.replace("%", "").replace(" ", "").replace(" ", "")
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace(",", "")
+    if text in ("", "-", "."):
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return -value if negative else value
+
+
+def _total_series(table):
+    """Yield every (values, total) pair a labelled total row or column implies."""
+    cells, rows, cols = table["cells"], table["rows"], table["cols"]
+
+    for r in range(HEADER_ROWS, rows):
+        labels = [cells[r][c] or "" for c in range(min(LABEL_COLS + 1, cols))]
+        if not any(TOTAL_WORD.search(label) for label in labels):
+            continue
+        for c in range(cols):
+            total = parse_number(cells[r][c])
+            values = [v for v in (parse_number(cells[i][c]) for i in range(HEADER_ROWS, r))
+                      if v is not None]
+            if total is None or len(values) < 2:
+                continue
+            yield {"axis": "row", "row": r, "col": c, "values": values, "total": total}
+
+    for c in range(LABEL_COLS, cols):
+        labels = [cells[r][c] or "" for r in range(min(HEADER_ROWS + 1, rows))]
+        if not any(TOTAL_WORD.search(label) for label in labels):
+            continue
+        for r in range(rows):
+            total = parse_number(cells[r][c])
+            values = [v for v in (parse_number(cells[r][i]) for i in range(LABEL_COLS, c))
+                      if v is not None]
+            if total is None or len(values) < 2:
+                continue
+            yield {"axis": "col", "row": r, "col": c, "values": values, "total": total}
+
+
+def table_arithmetic(candidate):
+    """Does a labelled total actually equal the sum of its series?
+
+    The only metric here that can be flatly right or wrong with no labels, so it
+    carries the most weight in the report. A misread cell, a dropped row, or a
+    column shifted by one all show up as a failure.
+    """
+    checked = 0
+    passed = 0
+    failures = []
+    for index, table in enumerate(candidate["tables"]):
+        for series in _total_series(table):
+            total = series["total"]
+            checked += 1
+            limit = max(abs(total) * TOLERANCE_RELATIVE, TOLERANCE_ABSOLUTE)
+            if abs(sum(series["values"]) - total) <= limit:
+                passed += 1
+            elif len(failures) < 20:
+                failures.append({
+                    "table": index, "page": table["page"], "axis": series["axis"],
+                    "row": series["row"], "col": series["col"],
+                    "summed": round(sum(series["values"]), 4), "printed": total,
+                })
+    return {
+        "checked": checked,
+        "passed": passed,
+        "pass_rate": (passed / checked) if checked else None,
+        "failures": failures,
+    }
+
+
+NUMERIC_CELL = re.compile(r"\d")
+
+
+def table_structure(candidate):
+    """Table count and cell density.
+
+    Rectangularity is deliberately not measured: ir.validate rejects a ragged
+    table and the runners pad short rows, so it would read 1.0 for every runner.
+    Empty-cell density catches the same failure — a misread grid — and can vary.
+    """
+    tables = candidate["tables"]
+    total_cells = sum(t["rows"] * t["cols"] for t in tables)
+    if not tables or not total_cells:
+        return {
+            "tables": len(tables), "cells": total_cells,
+            "empty_cell_ratio": None, "numeric_cell_ratio": None,
+            "median_rows": None, "median_cols": None,
+        }
+    flat = [cell for t in tables for row in t["cells"] for cell in row]
+    empty = sum(1 for cell in flat if not (cell or "").strip())
+    numeric = sum(1 for cell in flat if NUMERIC_CELL.search(cell or ""))
+    return {
+        "tables": len(tables),
+        "cells": total_cells,
+        "empty_cell_ratio": empty / len(flat),
+        "numeric_cell_ratio": numeric / len(flat),
+        "median_rows": statistics.median([t["rows"] for t in tables]),
+        "median_cols": statistics.median([t["cols"] for t in tables]),
+    }
+
+
+# ------------------------------------------------------------------- chunks
+
+ORPHAN_CHARS = 100
+
+
+def chunk_health(candidate):
+    """Are the chunks something a retriever could use?"""
+    chunks = candidate["chunks"]
+    if not chunks:
+        return {
+            "chunks": 0, "median_chars": None, "p10_chars": None, "p90_chars": None,
+            "orphan_chunks": 0, "midsentence_starts": 0, "straddling_chunks": 0,
+        }
+
+    sizes = sorted(c["chars"] for c in chunks)
+    header_orders = {b["order"] for b in candidate["blocks"] if b["kind"] == "section_header"}
+
+    def straddles(chunk):
+        ids = chunk.get("block_ids") or []
+        if len(ids) < 2:
+            return False
+        low, high = min(ids), max(ids)
+        return any(low < order < high for order in header_orders)
+
+    def quantile(fraction):
+        return sizes[min(len(sizes) - 1, int(fraction * len(sizes)))]
+
+    return {
+        "chunks": len(chunks),
+        "median_chars": statistics.median(sizes),
+        "p10_chars": quantile(0.10),
+        "p90_chars": quantile(0.90),
+        "orphan_chunks": sum(1 for c in chunks if c["chars"] < ORPHAN_CHARS),
+        "midsentence_starts": sum(1 for c in chunks if c["text"][:1].islower()),
+        "straddling_chunks": sum(1 for c in chunks if straddles(c)),
+    }
