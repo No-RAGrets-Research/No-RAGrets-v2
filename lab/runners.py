@@ -1,0 +1,263 @@
+"""The four runners, and the helpers they share.
+
+Every runner ends by calling finish(), which applies the one chunker. That is
+what holds chunking constant so extraction is the only variable.
+"""
+import json
+import pathlib
+import re
+import statistics
+import subprocess
+import time
+
+from lab import ir
+
+RUNNERS = {}
+
+
+def runner(name):
+    def register(fn):
+        RUNNERS[name] = fn
+        return fn
+    return register
+
+
+# ---------------------------------------------------------------- classification
+
+CANONICAL_SECTIONS = (
+    "abstract", "introduction", "background", "methods", "materials and methods",
+    "method", "results", "results and discussion", "discussion", "conclusion",
+    "conclusions", "references", "acknowledgements", "acknowledgments",
+)
+
+CAPTION_RE = re.compile(r"^\s*(figure|fig\.?|table|scheme|plate)\s*\d+", re.I)
+NUMBERED_HEADING_RE = re.compile(r"^\s*(\d+(\.\d+)*)[.)]?\s+(?P<rest>[A-Za-z].*)$")
+
+
+def classify(text):
+    """Header / caption / paragraph from the text alone.
+
+    Known ceiling: no font-size or boldness signal, because two of the four
+    runners do not expose it. An all-caps figure caption could read as a header.
+    Upgrade path is passing per-line font size through the line dicts.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "other"
+    if CAPTION_RE.match(stripped):
+        return "caption"
+
+    candidate = stripped
+    numbered = NUMBERED_HEADING_RE.match(stripped)
+    if numbered:
+        candidate = numbered.group("rest")
+
+    bare = candidate.rstrip(":.").strip()
+    if bare.lower() in CANONICAL_SECTIONS:
+        return "section_header"
+    words = bare.split()
+    if numbered and len(words) <= 8 and not bare.endswith("."):
+        return "section_header"
+    if len(words) <= 6 and bare.isupper() and len(bare) > 2:
+        return "section_header"
+    return "paragraph"
+
+
+# ------------------------------------------------------------- line -> paragraph
+
+def group_lines(lines):
+    """Join lines into paragraph-ish blocks on vertical gaps.
+
+    Runners that emit lines (pdfplumber, pdfjs) go through this so their block
+    granularity matches Docling's. Without it, the reading-order metric would
+    measure block size rather than extraction quality.
+    """
+    lines = [l for l in lines if l["text"].strip()]
+    if not lines:
+        return []
+
+    heights = [l["bbox"][3] - l["bbox"][1] for l in lines if l["bbox"]]
+    typical = statistics.median(heights) if heights else 10.0
+    gap_limit = 1.6 * typical
+
+    groups = [[lines[0]]]
+    for previous, current in zip(lines, lines[1:]):
+        gap = current["bbox"][1] - previous["bbox"][3] if (previous["bbox"] and current["bbox"]) else 0
+        starts_new = (
+            gap > gap_limit
+            or classify(current["text"]) != "paragraph"
+            or classify(previous["text"]) != "paragraph"
+        )
+        if starts_new:
+            groups.append([current])
+        else:
+            groups[-1].append(current)
+
+    blocks = []
+    for group in groups:
+        text = _join_lines([l["text"] for l in group])
+        boxes = [l["bbox"] for l in group if l["bbox"]]
+        bbox = None
+        if boxes:
+            bbox = [
+                min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes),
+            ]
+        blocks.append({"kind": classify(text), "text": text, "bbox": bbox})
+    return blocks
+
+
+def _join_lines(texts):
+    out = ""
+    for text in texts:
+        piece = text.strip()
+        if not out:
+            out = piece
+        elif out.endswith("-"):
+            out = out[:-1] + piece      # de-hyphenate a wrapped word
+        else:
+            out = out + " " + piece
+    return out
+
+
+# -------------------------------------------------------------------- chunking
+
+SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+CHUNK_BUDGET = 1200
+
+
+def split_sentences(text):
+    """Regex sentence splitting.
+
+    Known ceiling: splits on "et al. 1984" and other abbreviations. Upgrade path
+    is swapping this one function for spaCy if chunk-health numbers turn out to
+    be dominated by split noise rather than extraction quality.
+    """
+    return [s.strip() for s in SENTENCE_BOUNDARY.split(text) if s.strip()]
+
+
+CHUNKABLE = {"paragraph", "caption", "other"}
+
+
+def chunk_blocks(blocks, budget=CHUNK_BUDGET):
+    """Split on section headers, then pack to a character budget on sentence
+    boundaries."""
+    chunks = []
+    section = "(front matter)"
+    buffer = []
+    block_ids = []
+
+    def flush():
+        nonlocal buffer, block_ids
+        text = " ".join(buffer).strip()
+        if text:
+            chunks.append({
+                "id": len(chunks), "text": text, "block_ids": list(block_ids),
+                "section": section, "chars": len(text),
+            })
+        buffer = []
+        block_ids = []
+
+    for block in blocks:
+        if block["kind"] == "section_header":
+            flush()
+            section = block["text"].strip() or section
+            continue
+        if block["kind"] not in CHUNKABLE:
+            continue
+        for sentence in split_sentences(block["text"]):
+            used = len(" ".join(buffer))
+            if buffer and used + len(sentence) + 1 > budget:
+                flush()
+            buffer.append(sentence)
+            if block["order"] not in block_ids:
+                block_ids.append(block["order"])
+    flush()
+    return chunks
+
+
+# ---------------------------------------------------------------------- finish
+
+def finish(paper_id, runner_name, runner_version, sha256, pages, wall_seconds, blocks, tables):
+    """Number the blocks, chunk them, validate, return the IR."""
+    for index, block in enumerate(blocks):
+        block["order"] = index
+        block.setdefault("bbox", None)
+    return ir.validate({
+        "paper_id": paper_id,
+        "runner": runner_name,
+        "runner_version": runner_version,
+        "pdf_sha256": sha256,
+        "pages": pages,
+        "wall_seconds": round(wall_seconds, 3),
+        "blocks": blocks,
+        "tables": tables,
+        "chunks": chunk_blocks(blocks),
+    })
+
+
+# ------------------------------------------------------------ pdfplumber floor
+
+def _pdfplumber_lines(page, tolerance=2.0):
+    rows = {}
+    for word in page.extract_words():
+        rows.setdefault(round(word["top"] / tolerance), []).append(word)
+    lines = []
+    for key in sorted(rows):
+        words = sorted(rows[key], key=lambda w: w["x0"])
+        lines.append({
+            "text": " ".join(w["text"] for w in words),
+            "bbox": [
+                min(w["x0"] for w in words), min(w["top"] for w in words),
+                max(w["x1"] for w in words), max(w["bottom"] for w in words),
+            ],
+        })
+    return lines
+
+
+@runner("pdfplumber")
+def run_pdfplumber(pdf_path, paper_id, sha256):
+    """The floor. MIT-licensed, no OCR, no ML — whatever a plain text layer gives."""
+    import pdfplumber
+
+    started = time.time()
+    blocks = []
+    tables = []
+    with pdfplumber.open(pdf_path) as pdf:
+        page_count = len(pdf.pages)
+        for number, page in enumerate(pdf.pages, start=1):
+            try:
+                raw_tables = page.extract_tables()  # a page pdfminer cannot parse yields no tables
+            except Exception:
+                raw_tables = []
+            for raw in raw_tables:
+                rows = [[(cell or "").strip() for cell in row] for row in raw]
+                cols = max((len(row) for row in rows), default=0)
+                rows = [row + [""] * (cols - len(row)) for row in rows]
+                if not rows or not cols:
+                    continue
+                tables.append({
+                    "page": number, "rows": len(rows), "cols": cols,
+                    "cells": rows, "caption": None,
+                })
+                blocks.append({"page": number, "kind": "table", "text": "", "bbox": None})
+            try:
+                lines = _pdfplumber_lines(page)  # a page pdfminer cannot parse yields no lines
+            except Exception:
+                lines = []
+            for block in group_lines(lines):
+                block["page"] = number
+                blocks.append(block)
+
+    return finish(
+        paper_id, "pdfplumber", _version("pdfplumber"), sha256,
+        page_count, time.time() - started, blocks, tables,
+    )
+
+
+def _version(package):
+    from importlib.metadata import version
+    try:
+        return f"{package}=={version(package)}"
+    except Exception:
+        return f"{package}==unknown"

@@ -143,6 +143,74 @@ def test_verify_passes_on_an_exact_match():
         assert manifest.verify(entries=entries, directory=d)["ok"] is True
 
 
+from lab import runners
+
+
+def test_split_sentences_splits_on_terminators():
+    assert runners.split_sentences("One. Two! Three?") == ["One.", "Two!", "Three?"]
+
+
+def test_split_sentences_keeps_a_single_fragment():
+    assert runners.split_sentences("no terminator here") == ["no terminator here"]
+
+
+def test_chunk_blocks_starts_a_new_chunk_at_a_section_header():
+    blocks = [
+        {"page": 1, "kind": "section_header", "text": "Methods", "bbox": None, "order": 0},
+        {"page": 1, "kind": "paragraph", "text": "Alpha.", "bbox": None, "order": 1},
+        {"page": 1, "kind": "section_header", "text": "Results", "bbox": None, "order": 2},
+        {"page": 1, "kind": "paragraph", "text": "Beta.", "bbox": None, "order": 3},
+    ]
+    chunks = runners.chunk_blocks(blocks)
+    assert [c["section"] for c in chunks] == ["Methods", "Results"], chunks
+    assert [c["text"] for c in chunks] == ["Alpha.", "Beta."]
+    assert chunks[0]["block_ids"] == [1]
+
+
+def test_chunk_blocks_respects_the_budget_and_keeps_block_ids():
+    blocks = [
+        {"page": 1, "kind": "paragraph", "text": "aaaa. bbbb. cccc.", "bbox": None, "order": 0},
+    ]
+    chunks = runners.chunk_blocks(blocks, budget=10)
+    assert len(chunks) > 1, chunks
+    assert all(c["block_ids"] == [0] for c in chunks), chunks
+    assert all(c["chars"] == len(c["text"]) for c in chunks)
+
+
+def test_chunk_blocks_skips_tables():
+    blocks = [{"page": 1, "kind": "table", "text": "", "bbox": None, "order": 0}]
+    assert runners.chunk_blocks(blocks) == []
+
+
+def test_classify_finds_headers_and_captions():
+    assert runners.classify("Methods") == "section_header"
+    assert runners.classify("3. MATERIALS AND METHODS") == "section_header"
+    assert runners.classify("Figure 2. Growth over time.") == "caption"
+    assert runners.classify("Table 1: Yields by condition") == "caption"
+    assert runners.classify("We grew the cultures for six days and measured them.") == "paragraph"
+
+
+def test_group_lines_joins_a_paragraph_and_dehyphenates():
+    lines = [
+        {"text": "we measured the cul-", "bbox": [10, 10, 90, 20]},
+        {"text": "tures every day.", "bbox": [10, 22, 90, 32]},
+        {"text": "A new paragraph starts here.", "bbox": [10, 60, 90, 70]},
+    ]
+    blocks = runners.group_lines(lines)
+    assert len(blocks) == 2, blocks
+    assert blocks[0]["text"] == "we measured the cultures every day."
+
+
+def test_pdfplumber_runner_smoke():
+    """The one test that touches a real PDF."""
+    path = pathlib.Path("fixtures/tiny.pdf")
+    assert path.exists(), "run python fixtures/make_tiny_pdf.py first"
+    out = runners.RUNNERS["pdfplumber"](path, "tiny", "0" * 64)
+    ir.validate(out)
+    assert out["pages"] == 1
+    assert "Methods" in " ".join(b["text"] for b in out["blocks"])
+
+
 def main():
     # Collected at call time, not at import time, so later tasks can append a
     # test anywhere in this file without touching the runner.
