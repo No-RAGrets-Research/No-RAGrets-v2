@@ -144,6 +144,96 @@ def test_verify_passes_on_an_exact_match():
 
 
 from lab import runners
+from lab import metrics
+
+
+def two_page_ir(page_one_text, page_two_text, runner_name="x"):
+    blocks = []
+    for page, text in ((1, page_one_text), (2, page_two_text)):
+        if text:
+            blocks.append({"page": page, "kind": "paragraph", "text": text,
+                           "bbox": [10, 10, 90, 20], "order": len(blocks)})
+    return {
+        "paper_id": "p", "runner": runner_name, "runner_version": "v",
+        "pdf_sha256": "0" * 64, "pages": 2, "wall_seconds": 4.0,
+        "blocks": blocks, "tables": [], "chunks": [],
+    }
+
+
+def test_coverage_flags_a_dropped_page():
+    floor = two_page_ir("x" * 1000, "y" * 1000)
+    candidate = two_page_ir("x" * 1000, "y" * 20)      # page 2 is 2% of floor
+    out = metrics.coverage(candidate, floor)
+    assert out["dropped_pages"] == [2], out
+    assert out["dropped_page_count"] == 1
+    assert 0.4 < out["median_page_ratio"] < 0.6, out
+
+
+def test_coverage_ignores_pages_the_floor_could_not_read():
+    floor = two_page_ir("x" * 1000, "")               # floor got nothing on page 2
+    candidate = two_page_ir("x" * 1000, "plenty of OCR text here")
+    out = metrics.coverage(candidate, floor)
+    assert out["dropped_pages"] == [], out
+    assert out["pages_compared"] == 1, out
+
+
+def test_agreement_is_one_for_identical_text_and_low_for_different():
+    a = two_page_ir("the cultures grew quickly", "second page of prose")
+    same = metrics.agreement(a, a)
+    assert same["median"] == 1.0, same
+    b = two_page_ir("zzzz qqqq wwww vvvv", "jjjj kkkk llll")
+    assert metrics.agreement(a, b)["median"] < 0.2
+
+
+def test_reading_order_penalises_a_backwards_jump():
+    forwards = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [
+            {"page": 1, "kind": "paragraph", "text": "first.", "bbox": [10, 10, 90, 20], "order": 0},
+            {"page": 1, "kind": "paragraph", "text": "second.", "bbox": [10, 30, 90, 40], "order": 1},
+            {"page": 1, "kind": "paragraph", "text": "third.", "bbox": [10, 50, 90, 60], "order": 2},
+        ],
+    }
+    assert metrics.reading_order(forwards)["monotonic_fraction"] == 1.0
+    backwards = copy.deepcopy(forwards)
+    backwards["blocks"][1]["bbox"] = [10, 500, 90, 510]   # jumps down then back up
+    assert metrics.reading_order(backwards)["monotonic_fraction"] < 1.0
+
+
+def test_reading_order_counts_truncated_paragraphs():
+    ir_with_truncation = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [
+            {"page": 1, "kind": "paragraph", "text": "we measured the cul-", "bbox": None, "order": 0},
+            {"page": 1, "kind": "paragraph", "text": "A complete sentence.", "bbox": None, "order": 1},
+        ],
+    }
+    out = metrics.reading_order(ir_with_truncation)
+    assert out["blocks_ending_midword"] == 1, out
+    assert out["monotonic_fraction"] is None, "no bboxes means no order claim"
+
+
+def test_structure_proxy_counts_canonical_sections():
+    sections = ["Abstract", "1. Introduction", "2. Materials and Methods",
+                "3. Results", "4. Discussion", "References", "Results"]
+    ir_with_sections = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [{"page": 1, "kind": "section_header", "text": t, "bbox": None, "order": i}
+                   for i, t in enumerate(sections)],
+    }
+    out = metrics.structure_proxy(ir_with_sections)
+    assert out["counts"]["results"] == 2, out
+    assert out["counts"]["methods"] == 1, out
+    assert out["found_exactly_once"] == 5, out
+    assert out["missing"] == [], out
+
+
+def test_cost_is_seconds_per_page():
+    out = metrics.cost(two_page_ir("a", "b"))
+    assert out["seconds_per_page"] == 2.0, out
 
 
 def test_split_sentences_splits_on_terminators():
