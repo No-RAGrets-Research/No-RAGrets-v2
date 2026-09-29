@@ -1,10 +1,13 @@
-"""Every check in the ingestion lab. Run: python lab/test_lab.py
+"""Every check in the ingestion lab. Run: ./.venv/bin/python lab/test_lab.py
 
 No pytest on purpose. These are asserts over hand-written IR dicts, because
 the metrics are pure functions and a PDF is not needed to test arithmetic.
 """
+import pathlib
 import copy
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lab import ir
 
