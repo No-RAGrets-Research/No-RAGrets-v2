@@ -5,6 +5,19 @@ scored entirely without ground-truth labels. This is a tool, not a dataset —
 the 47-paper corpus it runs against lives outside this repo and is not
 committed here.
 
+## Where the corpus comes from
+
+The 47 PDFs this lab runs against are not in this repo and are not
+redistributable — they are scientific papers with their own copyright, not
+this project's to publish. `corpus.manifest.json` records each paper's
+filename and sha256, so a run can be verified against a specific corpus
+snapshot without ever shipping the PDFs themselves. `$NORAGRETS_CORPUS` must
+point at a local directory of PDFs matching that manifest (see `python -m lab
+manifest verify`); for this project's own runs, that directory is
+`No-RAGrets-Master/data/papers`. A fresh clone of this repo has code, the
+manifest, and `results/REPORT.md`, but no way to reproduce a run without
+separately obtaining a corpus that matches the manifest.
+
 ## Why no labels
 
 No-RAGrets v1 had no way to tell whether an extractor was dropping content

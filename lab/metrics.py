@@ -281,6 +281,66 @@ def table_structure(candidate):
     }
 
 
+# ------------------------------------------------------------------- layout
+
+def column_interleaving(candidate, min_chars=150):
+    """Share of paragraph blocks that span a page's likely column gutter.
+
+    No metric elsewhere in this lab can see cross-column merging: coverage is
+    a count, agreement is an order-blind bag of n-grams, and reading order is
+    tautological for runners that emit geometrically sorted blocks. A block
+    that starts in the left column and ends in the right one was built from
+    text that was never one column wide.
+
+    Page extent is taken per page as the maximum block x1 for THIS runner on
+    THAT page, so the thresholds are page-relative fractions rather than
+    absolute points -- page width varies roughly 386pt to 1329pt across this
+    corpus and differs by a few percent between runners on the same PDF.
+
+    Reported twice: over all paragraph blocks, and over blocks of at least
+    min_chars characters. The size-conditioned figure is the comparable one,
+    because median paragraph length differs by an order of magnitude between
+    the docling runners and the line-based ones.
+
+    Known ceiling: a genuinely full-width paragraph on a two-column page (an
+    abstract, a wide table caption) counts as spanning. Upgrade path is
+    detecting the gutter's x-position per page from the distribution of block
+    edges rather than assuming it is central.
+    """
+    paragraphs = [b for b in candidate["blocks"] if b["kind"] == "paragraph" and b["bbox"]]
+
+    page_extent = {}
+    for b in paragraphs:
+        page_extent[b["page"]] = max(page_extent.get(b["page"], 0), b["bbox"][2])
+
+    def spans(block):
+        extent = page_extent.get(block["page"], 0)
+        if not extent:
+            return None
+        x0, x1 = block["bbox"][0], block["bbox"][2]
+        return x0 < 0.35 * extent and x1 > 0.65 * extent
+
+    counted = [(b, spans(b)) for b in paragraphs]
+    counted = [(b, s) for b, s in counted if s is not None]
+
+    total = len(counted)
+    spanning = sum(1 for _, s in counted if s)
+
+    large = [(b, s) for b, s in counted if len(b["text"]) >= min_chars]
+    total_large = len(large)
+    spanning_large = sum(1 for _, s in large if s)
+
+    return {
+        "paragraphs": total,
+        "spanning": spanning,
+        "ratio": (spanning / total) if total else None,
+        "paragraphs_large": total_large,
+        "spanning_large": spanning_large,
+        "ratio_large": (spanning_large / total_large) if total_large else None,
+        "min_chars": min_chars,
+    }
+
+
 # ------------------------------------------------------------------- chunks
 
 ORPHAN_CHARS = 100

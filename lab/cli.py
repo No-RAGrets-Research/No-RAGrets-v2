@@ -38,9 +38,8 @@ def cmd_run(args):
             "Fix the corpus or rebuild the manifest; a run over a drifted corpus is not comparable."
         )
 
-    entries = manifest.load()
-    if args.limit:
-        entries = entries[: args.limit]
+    all_entries = manifest.load()
+    entries = all_entries[: args.limit] if args.limit else all_entries
 
     RESULTS_DIR.mkdir(exist_ok=True)
     out_path = RESULTS_DIR / f"{args.runner}.jsonl"
@@ -58,25 +57,31 @@ def cmd_run(args):
 
     directory = manifest.corpus_dir()
     written = 0
+    # Start from every cached record so a --limit run can never shrink the file:
+    # only paper_ids in `entries` (the limited slice, or all of them) are
+    # touched below; every other cached record rides through untouched.
+    output = dict(done)
+    for entry in entries:
+        paper_id = pathlib.Path(entry["filename"]).stem
+        cached = done.get(paper_id)
+        if (cached and cached["pdf_sha256"] == entry["sha256"]
+                and cached.get("runner_version") == current_version and not args.force):
+            continue
+        try:
+            result = runners.RUNNERS[args.runner](
+                directory / entry["filename"], paper_id, entry["sha256"],
+            )
+        except Exception as e:
+            print(f"FAILED  {paper_id}: {type(e).__name__}: {e}")
+            continue
+        output[paper_id] = result
+        written += 1
+        print(f"{args.runner:16} {paper_id:45} {result['wall_seconds']:7.1f}s "
+              f"{len(result['blocks']):5d} blocks {len(result['tables']):3d} tables")
+
     with out_path.open("w") as fh:
-        for entry in entries:
-            paper_id = pathlib.Path(entry["filename"]).stem
-            cached = done.get(paper_id)
-            if (cached and cached["pdf_sha256"] == entry["sha256"]
-                    and cached.get("runner_version") == current_version and not args.force):
-                fh.write(json.dumps(cached) + "\n")
-                continue
-            try:
-                result = runners.RUNNERS[args.runner](
-                    directory / entry["filename"], paper_id, entry["sha256"],
-                )
-            except Exception as e:
-                print(f"FAILED  {paper_id}: {type(e).__name__}: {e}")
-                continue
-            fh.write(json.dumps(result) + "\n")
-            written += 1
-            print(f"{args.runner:16} {paper_id:45} {result['wall_seconds']:7.1f}s "
-                  f"{len(result['blocks']):5d} blocks {len(result['tables']):3d} tables")
+        for record in output.values():
+            fh.write(json.dumps(record) + "\n")
 
     print(f"wrote {written} fresh results to {out_path}")
     return 0

@@ -37,6 +37,18 @@ def _mean(values):
     return statistics.fmean(values) if values else None
 
 
+def _pooled_gutter_ratio(gutter_structures, key_paragraphs, key_spanning):
+    """Gutter-span ratio pooled across papers: sum spanning, sum paragraphs,
+    divide once -- the same pooling discipline already applied to the
+    empty-cells column, for the same reason (a paper with few paragraphs
+    should not weigh the same as a paper with thousands)."""
+    total_paragraphs = sum(g[key_paragraphs] for g in gutter_structures)
+    if not total_paragraphs:
+        return None
+    total_spanning = sum(g[key_spanning] for g in gutter_structures)
+    return total_spanning / total_paragraphs
+
+
 def _pooled_empty_cell_ratio(table_structures):
     """Empty cells over total cells, pooled across every paper's table.
 
@@ -72,6 +84,7 @@ def score(results_by_runner, floor=FLOOR_RUNNER):
                 "arithmetic": metrics.table_arithmetic(candidate),
                 "chunks": metrics.chunk_health(candidate),
                 "cost": metrics.cost(candidate),
+                "gutter": metrics.column_interleaving(candidate),
             }
 
         covered = [p["coverage"] for p in per_paper.values() if p["coverage"]]
@@ -111,6 +124,13 @@ def score(results_by_runner, floor=FLOOR_RUNNER):
                 "total": sum(p["tables"]["tables"] for p in per_paper.values()),
                 "empty_cell_ratio": _pooled_empty_cell_ratio(
                     [p["tables"] for p in per_paper.values()]),
+            },
+            "gutter": {
+                "ratio": _pooled_gutter_ratio(
+                    [p["gutter"] for p in per_paper.values()], "paragraphs", "spanning"),
+                "ratio_large": _pooled_gutter_ratio(
+                    [p["gutter"] for p in per_paper.values()],
+                    "paragraphs_large", "spanning_large"),
             },
             "arithmetic": {
                 "checked": arithmetic_checked,
@@ -212,9 +232,10 @@ def render(scored):
         "real regression — it simply has nothing to report on this corpus today.",
         "",
         "| runner | papers | cov. papers | cov. mean-of-medians | dropped pages | chars | "
-        "order monotonic | midword | sections/6 | tables | empty cells (pooled) | arith checked | "
+        "order monotonic | midword | sections/6 | tables | empty cells (pooled) | "
+        "gutter-span (150ch+) | arith checked | "
         "arith pass | chunks | orphans | s/page |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for runner, s in scored["runners"].items():
         lines.append(
@@ -224,7 +245,9 @@ def render(scored):
             f"{_cell(s['reading_order']['monotonic_fraction'])} | "
             f"{s['reading_order']['blocks_ending_midword']} | "
             f"{_cell(s['structure']['found_exactly_once'], 2)} | {s['tables']['total']} | "
-            f"{_cell(s['tables']['empty_cell_ratio'])} | {s['arithmetic']['checked']} | "
+            f"{_cell(s['tables']['empty_cell_ratio'])} | "
+            f"{_cell(s['gutter']['ratio_large'])} | "
+            f"{s['arithmetic']['checked']} | "
             f"{_cell(s['arithmetic']['pass_rate'])} | {s['chunks']['total']} | "
             f"{s['chunks']['orphan_chunks']} | {_cell(s['cost']['seconds_per_page'], 2)} |"
         )

@@ -250,6 +250,69 @@ def test_cost_is_seconds_per_page():
     assert out["seconds_per_page"] == 2.0, out
 
 
+def paragraph_block(order, x0, x1, chars=150, page=1):
+    return {"page": page, "kind": "paragraph", "text": "x" * chars,
+            "bbox": [x0, 10, x1, 20], "order": order}
+
+
+def test_column_interleaving_flags_a_spanning_block_on_a_wide_page():
+    """Two-column page, extent 600: a block from x0=50 to x1=550 crosses both
+    the 0.35 and 0.65 fractional thresholds and must count as spanning. A
+    block confined to one column (50..280, under 0.65*600=390) must not."""
+    candidate = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [
+            paragraph_block(0, 50, 550),    # spans the gutter
+            paragraph_block(1, 50, 280),    # confined to the left column
+            paragraph_block(2, 590, 600, chars=10),  # pins page extent at 600
+        ],
+    }
+    out = metrics.column_interleaving(candidate)
+    assert out["paragraphs"] == 3, out
+    assert out["spanning"] == 1, out
+
+
+def test_column_interleaving_is_page_relative_not_absolute():
+    """A narrow single-column page (extent ~390) with a block spanning
+    50..380 must count as spanning at ITS OWN scale (0.35*390=136.5,
+    0.65*390=253.5 -- x0=50 < 136.5 and x1=380 > 253.5), proving the metric
+    uses page-relative fractions rather than the old hardcoded absolute
+    thresholds (x0 < 200 and x1 > 400), which would have missed this block
+    entirely since x1=380 never exceeds 400."""
+    candidate = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [paragraph_block(0, 50, 380, chars=150)],
+    }
+    out = metrics.column_interleaving(candidate)
+    assert out["ratio"] == 1.0, out
+
+
+def test_column_interleaving_size_conditioning_excludes_short_blocks():
+    """One 200-char spanning block plus three 20-char spanning blocks: `ratio`
+    must count all four (all span the gutter), while `ratio_large` (min_chars
+    default 150) must count only the long one -- proving the size-matched
+    figure is not just the unconditioned ratio in disguise."""
+    candidate = {
+        "paper_id": "p", "runner": "x", "runner_version": "v", "pdf_sha256": "0" * 64,
+        "pages": 1, "wall_seconds": 1.0, "tables": [], "chunks": [],
+        "blocks": [
+            paragraph_block(0, 50, 550, chars=200),
+            paragraph_block(1, 50, 550, chars=20),
+            paragraph_block(2, 50, 550, chars=20),
+            paragraph_block(3, 50, 550, chars=20),
+        ],
+    }
+    out = metrics.column_interleaving(candidate)
+    assert out["paragraphs"] == 4, out
+    assert out["spanning"] == 4, out
+    assert out["ratio"] == 1.0, out
+    assert out["paragraphs_large"] == 1, out
+    assert out["spanning_large"] == 1, out
+    assert out["ratio_large"] == 1.0, out
+
+
 def test_split_sentences_splits_on_terminators():
     assert runners.split_sentences("One. Two! Three?") == ["One.", "Two!", "Three?"]
 
