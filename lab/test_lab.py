@@ -677,5 +677,99 @@ def main():
     return 1 if failures else 0
 
 
+
+import argparse
+import contextlib
+import json
+
+from lab import cli
+
+
+@contextlib.contextmanager
+def fake_run_env(filenames):
+    """`cmd_run` against a fake corpus, runner and results dir.
+
+    The cache key and the --limit slice are the only real logic in cli.py and
+    both have already produced bugs (a stale replay in v1, a truncated results
+    file here), so they get tested without a 20-minute docling run.
+    """
+    state = {"version": "v1", "calls": []}
+
+    def fake_runner(path, paper_id, sha):
+        state["calls"].append(paper_id)
+        return {"paper_id": paper_id, "runner": "fake", "runner_version": state["version"],
+                "pdf_sha256": sha, "pages": 1, "wall_seconds": 0.1,
+                "blocks": [], "tables": [], "chunks": []}
+
+    entries = [{"filename": name, "sha256": chr(ord("a") + i) * 64}
+               for i, name in enumerate(filenames)]
+    saved = (cli.RESULTS_DIR, manifest.verify, manifest.load, manifest.corpus_dir,
+             runners.RUNNERS, runners.RUNNER_VERSIONS)
+    with tempfile.TemporaryDirectory() as d:
+        cli.RESULTS_DIR = pathlib.Path(d) / "results"
+        manifest.verify = lambda *a, **k: {"missing": [], "extra": [], "changed": [], "ok": True}
+        manifest.load = lambda: entries
+        manifest.corpus_dir = lambda: pathlib.Path(d)
+        runners.RUNNERS = {"fake": fake_runner}
+        runners.RUNNER_VERSIONS = {"fake": lambda: state["version"]}
+        try:
+            yield state, cli.RESULTS_DIR / "fake.jsonl"
+        finally:
+            (cli.RESULTS_DIR, manifest.verify, manifest.load, manifest.corpus_dir,
+             runners.RUNNERS, runners.RUNNER_VERSIONS) = saved
+
+
+def run_args(limit=0, force=False, runner="fake"):
+    return argparse.Namespace(runner=runner, limit=limit, force=force)
+
+
+def records(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_cmd_run_caches_on_sha_and_reruns_after_a_version_bump():
+    with fake_run_env(["a.pdf"]) as (state, out):
+        cli.cmd_run(run_args())
+        assert state["calls"] == ["a"], state["calls"]
+        cli.cmd_run(run_args())
+        assert state["calls"] == ["a"], "a cached paper was converted twice"
+        state["version"] = "v2"
+        cli.cmd_run(run_args())
+        assert state["calls"] == ["a", "a"], "a version bump did not invalidate the cache"
+        assert [r["runner_version"] for r in records(out)] == ["v2"]
+
+
+def test_cmd_run_with_limit_keeps_the_papers_outside_the_slice():
+    with fake_run_env(["a.pdf", "b.pdf"]) as (state, out):
+        cli.cmd_run(run_args())
+        assert sorted(r["paper_id"] for r in records(out)) == ["a", "b"]
+        cli.cmd_run(run_args(limit=1, force=True))
+        assert state["calls"] == ["a", "b", "a"], state["calls"]
+        assert sorted(r["paper_id"] for r in records(out)) == ["a", "b"], \
+            "--limit truncated the results file"
+
+
+def test_cmd_run_refuses_an_unknown_runner():
+    with fake_run_env(["a.pdf"]):
+        try:
+            cli.cmd_run(run_args(runner="nope"))
+        except SystemExit as e:
+            assert "nope" in str(e)
+        else:
+            raise AssertionError("an unknown runner was accepted")
+
+
+def test_cmd_run_refuses_a_corpus_that_drifted_from_the_manifest():
+    with fake_run_env(["a.pdf"]) as (state, out):
+        manifest.verify = lambda *a, **k: {
+            "missing": ["gone.pdf"], "extra": [], "changed": [], "ok": False}
+        try:
+            cli.cmd_run(run_args())
+        except SystemExit as e:
+            assert "gone.pdf" in str(e)
+        else:
+            raise AssertionError("a run over a drifted corpus was allowed")
+        assert not out.exists() and state["calls"] == []
+
 if __name__ == "__main__":
     sys.exit(main())

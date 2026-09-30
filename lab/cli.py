@@ -43,8 +43,11 @@ def cmd_run(args):
 
     RESULTS_DIR.mkdir(exist_ok=True)
     out_path = RESULTS_DIR / f"{args.runner}.jsonl"
+    # Read unconditionally, even under --force: `done` is both the cache lookup
+    # AND what keeps papers outside a --limit slice in the file. --force still
+    # re-runs everything in the slice, because the cache-hit test below checks it.
     done = {}
-    if out_path.exists() and not args.force:
+    if out_path.exists():
         for line in out_path.read_text().splitlines():
             if line.strip():
                 record = json.loads(line)

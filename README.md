@@ -75,7 +75,12 @@ hash means byte-for-byte identical output apart from timing.
 ```
 
 `run` caches per-paper results and skips work already done; `--force` ignores
-the cache, `--limit N` runs only the first N papers.
+the cache, `--limit N` runs only the first N papers. The cache key is the
+paper's sha256 plus the runner's version string, so a library upgrade
+re-converts instead of replaying stale output. One consequence: an imported
+baseline is stamped `docling==2.60.0 (imported)`, which no live run can match,
+so `run docling-default` after `import-baseline` always re-converts. That is
+not the documented workflow — the baseline is meant to stay imported.
 
 ## Docs
 
