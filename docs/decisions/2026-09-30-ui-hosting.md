@@ -54,3 +54,22 @@ lexical measurably falls short.
 Open, not decided here: Part 3's conversation layer needs an LLM call, and a browser-only app has
 nowhere safe to keep a key. Either a free-tier proxy (Cloudflare Worker) or the user supplies their
 own key. That is Part 3's problem, and it does not change anything above.
+
+## Amended 2026-10-01, during Part 2a design
+
+Two things above are now wrong, both my errors, corrected by Soren:
+
+1. **"Private, because the 47 papers aren't redistributable" is withdrawn.** Soren's correction of
+   2026-09-28 stands: these papers are not copyright-encumbered. The corpus — chunk text and the PDFs
+   — ships publicly, and corpus mode needs no private deploy. The PDFs still stay out of git (they
+   travel as a GitHub Release asset the Pages build unpacks), so the repo remains a tool rather than a
+   dataset, but that is a repo-hygiene choice now, not a rights one.
+2. **"Zero-server" is now "zero-server for search and provenance".** Q&A is in scope for Part 2, and
+   Soren chose a free Cloudflare Worker holding the model key over asking each visitor for their own.
+   So there is exactly one server-side component, it holds no corpus and no state beyond rate-limit
+   counters, and search, reading and highlighting all keep working when it is down.
+
+Part 2 also split in two during design. 2a is the reader over one corpus bundle
+(`docs/superpowers/specs/2026-10-01-part2a-reader-design.md`); 2b is bring-your-own corpus — the
+switcher, saved corpora, and in-browser pdf.js ingestion — which is where the measured pdf.js limits
+above actually land.
