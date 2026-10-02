@@ -850,5 +850,69 @@ def test_write_bundle_skips_a_pdf_that_is_not_in_the_corpus():
         assert written["counts"]["papers"] == 1
 
 
+from lab import embed
+
+
+def test_embed_texts_normalizes_rows_even_if_the_embedder_does_not():
+    import numpy as np
+    # A deliberately unnormalized fake: cosine is only a dot product if rows are
+    # unit length, and whether fastembed normalizes is not ours to assume.
+    fake = lambda texts: [np.array([3.0, 4.0] + [0.0] * 382, dtype=np.float32) for _ in texts]
+    out = embed.embed_texts(["a", "b"], embedder=fake)
+    assert out.shape == (2, 384), out.shape
+    assert abs(float(np.linalg.norm(out[0])) - 1.0) < 1e-6
+
+
+def test_quantize_roundtrip_keeps_cosine_within_tolerance():
+    import numpy as np
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(64, 384)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+    q, scales = embed.quantize(vectors)
+    assert q.dtype == np.int8 and q.shape == (64, 384)
+    mean_error, worst_cos = embed.quantization_error(vectors, q, scales)
+    assert mean_error < 0.001, mean_error
+    assert worst_cos > 0.99, worst_cos
+
+
+def test_write_vectors_round_trips_through_the_documented_layout():
+    import numpy as np
+    fake = lambda texts: [np.full(384, i + 1, dtype=np.float32) for i, _ in enumerate(texts)]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "manifest.json").write_text(json.dumps({"counts": {"papers": 1, "chunks": 3}, "files": {}}))
+        stats = embed.write_vectors(d, ["a", "b", "c"], embedder=fake)
+        assert stats["dim"] == 384 and stats["count"] == 3
+
+        manifest = json.loads((d / "manifest.json").read_text())
+        assert manifest["embed_model"] == embed.MODEL
+        assert manifest["dim"] == 384
+        assert "vectors.bin" in manifest["files"]
+
+        raw = (d / "vectors.bin").read_bytes()
+        assert len(raw) == 3 * 4 + 3 * 384, len(raw)
+        scales = np.frombuffer(raw, dtype=np.float32, count=3)
+        q = np.frombuffer(raw, dtype=np.int8, offset=3 * 4).reshape(3, 384)
+        back = embed.dequantize(q, scales)
+        back /= np.linalg.norm(back, axis=1, keepdims=True)
+        # all three fakes are constant vectors, so every row is the same direction
+        assert float((back[0] * back[2]).sum()) > 0.999
+
+
+def test_write_bundle_does_not_disturb_an_existing_vectors_file():
+    record = ir_with_pages()
+    entries = [{"filename": "Two Page Paper.pdf", "sha256": "0" * 64,
+                "pages": 2, "chars_text_layer": 500, "scanned": False, "doi": None}]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        corpus = d / "corpus"
+        corpus.mkdir()
+        out = d / "bundle"
+        (out / "pdfs").mkdir(parents=True)
+        (out / "vectors.bin").write_bytes(b"PRECIOUS")
+        export.write_bundle([record], entries, out, corpus)
+        assert (out / "vectors.bin").read_bytes() == b"PRECIOUS"
+
+
 if __name__ == "__main__":
     sys.exit(main())

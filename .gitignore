@@ -223,5 +223,4 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
-bundles/*/vectors.bin
-bundles/*/pdfs/
+bundles/

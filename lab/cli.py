@@ -152,6 +152,16 @@ def cmd_export(args):
 
     if args.no_embed:
         print("  --no-embed: vectors.bin left alone, semantic search unavailable")
+        return 0
+
+    from lab import embed
+
+    chunks = json.loads((pathlib.Path(args.out) / "chunks.json").read_text())
+    stats = embed.write_vectors(pathlib.Path(args.out), [c["text"] for c in chunks])
+    print(f"  embedded {stats['count']} chunks with {embed.MODEL} "
+          f"({stats['bytes'] / 1e6:.2f} MB)")
+    print(f"  int8 quantization: mean cosine error {stats['mean_cosine_error']:.5f}, "
+          f"worst row cosine {stats['worst_cosine']:.4f}")
     return 0
 
 
