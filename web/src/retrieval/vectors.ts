@@ -21,3 +21,18 @@ export function dequantize(buffer: ArrayBuffer, count: number, dim: number): Flo
   }
   return out;
 }
+
+/** Top k rows by dot product. Rows and query are unit length, so dot == cosine. */
+export function cosineTopK(
+  query: Float32Array, matrix: Float32Array, count: number, dim: number, k: number,
+) {
+  const scored: { index: number; score: number }[] = [];
+  for (let row = 0; row < count; row++) {
+    let dot = 0;
+    const offset = row * dim;
+    for (let i = 0; i < dim; i++) dot += query[i] * matrix[offset + i];
+    scored.push({ index: row, score: dot });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, k);
+}
