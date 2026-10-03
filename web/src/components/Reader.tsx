@@ -33,7 +33,7 @@ export function Reader({ bundle }: { bundle: Bundle }) {
   if (!paper) return <p className="p-6">No paper called {decodeURIComponent(paperId)} in this bundle.</p>;
 
   const pdfMissing = bundle.manifest.missing_pdfs.includes(paper.filename);
-  const rects = firstRegion && firstRegion.page === pageNumber ? firstRegion.rects : [];
+  const rects = focused?.regions.find((r) => r.page === pageNumber)?.rects ?? [];
 
   return (
     <main className="mx-auto max-w-6xl p-6">
