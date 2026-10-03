@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { Bundle } from "../bundle";
 import { SearchPanel } from "./SearchPanel";
+import { AskBox } from "./AskBox";
 
 export function PaperList({ bundle }: { bundle: Bundle }) {
   const counts = new Map<string, number>();
@@ -18,6 +19,7 @@ export function PaperList({ bundle }: { bundle: Bundle }) {
       </p>
 
       <SearchPanel bundle={bundle} />
+      <AskBox bundle={bundle} scope={{ kind: "corpus" }} />
 
       <ul className="mt-6 divide-y">
         {bundle.papers.map((paper) => (

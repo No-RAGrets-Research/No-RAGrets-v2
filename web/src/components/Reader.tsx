@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Document, Page, pdfjs } from "react-pdf";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { Bundle } from "../bundle";
 import { pageScale } from "../geometry";
 import { Highlight } from "./Highlight";
-// import { AskBox } from "./AskBox"; // TODO(Task 11): uncomment once AskBox exists
+import { AskBox } from "./AskBox";
 
 // The worker must be configured in this module, not a separate file imported
 // from main.tsx: react-pdf's own README warns that module execution order can
@@ -31,6 +31,16 @@ export function Reader({ bundle }: { bundle: Bundle }) {
   // this corpus and rendering every page of it is how a reader locks up.
   const [pageNumber, setPageNumber] = useState(firstRegion?.page ?? 1);
   const [scale, setScale] = useState(1);
+
+  // Keyed on the focused chunk's id, not on firstRegion itself: a citation
+  // chip changes `?chunk=` while this component stays mounted (the
+  // useState initializer above only runs on mount), so something has to
+  // follow it to the cited page. Keying on focused?.id rather than on
+  // pageNumber or firstRegion means this never re-fires just because the
+  // user turned the page by hand — only a genuinely new focused chunk moves it.
+  useEffect(() => {
+    if (firstRegion) setPageNumber(firstRegion.page);
+  }, [focused?.id]);
 
   if (!paper) return <p className="p-6">No paper called {decodeURIComponent(paperId)} in this bundle.</p>;
 
@@ -100,7 +110,7 @@ export function Reader({ bundle }: { bundle: Bundle }) {
               <p className="mt-2 whitespace-pre-wrap text-sm">{focused.text}</p>
             </section>
           )}
-          {/* <AskBox bundle={bundle} scope={{ kind: "paper", paperId: paper.paper_id }} /> */}
+          <AskBox bundle={bundle} scope={{ kind: "paper", paperId: paper.paper_id }} />
         </aside>
       </div>
     </main>
