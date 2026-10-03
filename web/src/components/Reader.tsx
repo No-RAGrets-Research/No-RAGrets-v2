@@ -66,6 +66,11 @@ export function Reader({ bundle }: { bundle: Bundle }) {
               <div className="relative mt-2 inline-block">
                 <Document
                   file={`${bundle.baseUrl}/pdfs/${encodeURIComponent(paper.filename)}`}
+                  // suspense (react-pdf's default) throws the load error
+                  // unconditionally via useSuspenseResource, bypassing the
+                  // `error` prop entirely with no boundary to catch it. The
+                  // effect path below is the one that actually renders it.
+                  suspense={false}
                   error={<p className="p-6 text-red-700">Could not render this PDF.</p>}
                 >
                   <Page
