@@ -64,7 +64,8 @@ export async function loadBundle(
     const buffer = await (await read("vectors.bin")).arrayBuffer();
     const { dequantize } = await import("./retrieval/vectors");
     vectors = dequantize(buffer, count, dim);
-  } catch {
+  } catch (error) {
+    console.warn(`vectors.bin unavailable, falling back to lexical: ${error}`);
     return { baseUrl, manifest, papers, chunks, vectors: null,
              semantic: { available: false, reason: "no-vectors" } };
   }

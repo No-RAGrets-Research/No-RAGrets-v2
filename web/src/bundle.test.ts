@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { loadBundle, QUERY_MODEL } from "./bundle";
 
 function fakeFetch(files: Record<string, unknown | ArrayBuffer>) {
@@ -55,12 +55,43 @@ describe("loadBundle", () => {
     expect(bundle.chunks).toHaveLength(2);   // reading and lexical search survive
   });
 
-  it("falls back to lexical when vectors.bin is absent", async () => {
+  it("reports no-vectors when the bundle was exported without embeddings", async () => {
     const bundle = await loadBundle("/bundles/fix", {
       fetch: fakeFetch({ "manifest.json": { ...manifest, embed_model: null, dim: null },
                          "papers.json": papers, "chunks.json": chunks }),
     });
     expect(bundle.semantic).toEqual({ available: false, reason: "no-vectors" });
+  });
+
+  it("falls back to lexical and warns when vectors.bin is missing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const bundle = await loadBundle("/bundles/fix", {
+        fetch: fakeFetch({ "manifest.json": manifest, "papers.json": papers,
+                           "chunks.json": chunks }),
+      });
+      expect(bundle.semantic).toEqual({ available: false, reason: "no-vectors" });
+      expect(bundle.chunks).toHaveLength(2);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("falls back to lexical and warns when vectors.bin is the wrong length", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const corrupt = new ArrayBuffer(8);   // valid dim 4, count 2 expects 16 bytes
+      const bundle = await loadBundle("/bundles/fix", {
+        fetch: fakeFetch({ "manifest.json": manifest, "papers.json": papers,
+                           "chunks.json": chunks, "vectors.bin": corrupt }),
+      });
+      expect(bundle.semantic).toEqual({ available: false, reason: "no-vectors" });
+      expect(bundle.chunks).toHaveLength(2);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("throws when the bundle itself cannot be read", async () => {
