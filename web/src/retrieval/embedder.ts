@@ -10,11 +10,9 @@ let pending: Promise<unknown> | null = null;
  * matched, so no guard would catch it. The parity test is what pins this.
  */
 export async function embedQuery(text: string): Promise<Float32Array> {
-  if (!pending) {
-    pending = import("@huggingface/transformers").then(({ pipeline }) =>
-      pipeline("feature-extraction", QUERY_MODEL, { dtype: "q8" }),
-    );
-  }
+  pending ??= import("@huggingface/transformers")
+    .then(({ pipeline }) => pipeline("feature-extraction", QUERY_MODEL, { dtype: "q8" }))
+    .catch((err) => { pending = null; throw err; });
   const extractor = (await pending) as (
     input: string, options: { pooling: "cls"; normalize: boolean },
   ) => Promise<{ data: Float32Array }>;
