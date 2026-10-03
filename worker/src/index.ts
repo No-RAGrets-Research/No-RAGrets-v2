@@ -3,7 +3,7 @@ import { LlmError, assertFreeModel } from "llm-kit";
 import { buildMessages, citedChunkIds, type AskChunk } from "./prompt";
 import { checkAndCount, type KvLike } from "./caps";
 
-type Env = {
+export type Env = {
   CAPS: KvLike; GROQ_API_KEY: string; MODEL: string;
   ALLOWED_ORIGIN: string; PER_DAY: string; PER_VISITOR: string;
 };
@@ -12,7 +12,9 @@ const MAX_CHUNKS = 12;
 const MAX_QUESTION = 500;
 
 function json(body: unknown, status: number, origin: string) {
-  return new Response(JSON.stringify(body), {
+  // A 204 may not carry a body per the Fetch spec; the Response constructor
+  // throws if given one. The OPTIONS preflight is the only 204 this sends.
+  return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json",
@@ -26,7 +28,18 @@ function json(body: unknown, status: number, origin: string) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = env.ALLOWED_ORIGIN;
+    // The preflight carries no body and spends no quota, so it is answered
+    // before the origin gate below rather than being subject to it.
     if (request.method === "OPTIONS") return json({}, 204, origin);
+
+    // CORS headers only stop a browser from *reading* a cross-origin response;
+    // they enforce nothing against a direct caller (curl, another server).
+    // Check the real request's Origin ourselves, before any cap check or LLM
+    // call, so a non-browser caller can't spend quota either.
+    if (request.headers.get("origin") !== origin) {
+      return json({ error: "forbidden origin" }, 403, origin);
+    }
+
     if (request.method !== "POST") return json({ error: "POST only" }, 405, origin);
     if (new URL(request.url).pathname !== "/ask") return json({ error: "not found" }, 404, origin);
 
@@ -43,16 +56,22 @@ export default {
     }
     if (chunks.length === 0) return json({ error: "no passages supplied" }, 400, origin);
 
+    // Checked before the cap is touched, and in its own try: assertFreeModel
+    // throws a plain Error (not LlmError), and a misconfigured model must not
+    // cost a visitor's or the day's quota on a request that answers nothing.
+    try {
+      assertFreeModel(env.MODEL);
+    } catch {
+      console.log("ask failed kind=bad-model");    // counts and kinds only, never the question
+      return json({ error: "bad-model" }, 500, origin);
+    }
+
     const visitor = request.headers.get("cf-connecting-ip") ?? "unknown";
     const day = new Date().toISOString().slice(0, 10);
     const decision = await checkAndCount(env.CAPS, visitor, day, {
       perDay: Number(env.PER_DAY), perVisitor: Number(env.PER_VISITOR),
     });
     if (!decision.allowed) return json({ error: decision.reason }, 429, origin);
-
-    // Zero cost is a hard constraint, so a paid-looking model id fails here
-    // rather than on a bill.
-    assertFreeModel(env.MODEL);
 
     try {
       const reply = await compatChat(buildMessages(question, chunks), {
