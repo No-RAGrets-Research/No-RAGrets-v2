@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { Bundle } from "../bundle";
-// import { SearchPanel } from "./SearchPanel"; // TODO(Task 9): uncomment once SearchPanel exists
+import { SearchPanel } from "./SearchPanel";
 
 export function PaperList({ bundle }: { bundle: Bundle }) {
   const counts = new Map<string, number>();
@@ -17,7 +17,7 @@ export function PaperList({ bundle }: { bundle: Bundle }) {
         extracted with {bundle.manifest.source_runner} ({bundle.manifest.runner_version}).
       </p>
 
-      {/* <SearchPanel bundle={bundle} /> */}
+      <SearchPanel bundle={bundle} />
 
       <ul className="mt-6 divide-y">
         {bundle.papers.map((paper) => (
