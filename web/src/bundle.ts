@@ -32,7 +32,7 @@ export const MODEL_PAIRS: Record<string, string> = {
 
 export async function loadBundle(
   baseUrl: string,
-  opts: { fetch?: typeof fetch } = {},
+  opts: { fetch?: (url: string) => Promise<Response> } = {},
 ): Promise<Bundle> {
   const get = opts.fetch ?? fetch;
 

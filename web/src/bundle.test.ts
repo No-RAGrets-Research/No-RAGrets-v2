@@ -50,8 +50,7 @@ describe("loadBundle", () => {
       fetch: fakeFetch({ "manifest.json": wrong, "papers.json": papers,
                          "chunks.json": chunks, "vectors.bin": vectorsBin() }),
     });
-    expect(bundle.semantic.available).toBe(false);
-    expect(bundle.semantic.reason).toBe("embed-model-mismatch");
+    expect(bundle.semantic).toEqual({ available: false, reason: "embed-model-mismatch" });
     expect(bundle.vectors).toBeNull();
     expect(bundle.chunks).toHaveLength(2);   // reading and lexical search survive
   });
