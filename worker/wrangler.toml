@@ -1,0 +1,14 @@
+name = "no-ragrets-ask"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Rate-limit counters only. No corpus, no question text.
+[[kv_namespaces]]
+binding = "CAPS"
+id = "<fill from: npx wrangler kv namespace create CAPS>"
+
+[vars]
+MODEL = "openai/gpt-oss-20b"
+ALLOWED_ORIGIN = "https://no-ragrets-research.github.io"
+PER_DAY = "15"
+PER_VISITOR = "3"
