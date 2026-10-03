@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Document, Page, pdfjs } from "react-pdf";
+import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { Bundle } from "../bundle";
 import { pageScale } from "../geometry";
 import { Highlight } from "./Highlight";
@@ -8,11 +9,12 @@ import { Highlight } from "./Highlight";
 
 // The worker must be configured in this module, not a separate file imported
 // from main.tsx: react-pdf's own README warns that module execution order can
-// let the default value overwrite a setting made elsewhere (Ruling 10).
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString();
+// let the default value overwrite a setting made elsewhere (Ruling 10). The
+// `?url` form (not the README's `new URL(..., import.meta.url)`) is required
+// under Vite: Vite resolves the bare specifier through node resolution to
+// the real node_modules asset, where `new URL` resolves it relative to this
+// module's own path instead and 404s to index.html (fix round 2).
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 export function Reader({ bundle }: { bundle: Bundle }) {
   const { paperId = "" } = useParams();
@@ -62,7 +64,10 @@ export function Reader({ bundle }: { bundle: Bundle }) {
                 </button>
               </div>
               <div className="relative mt-2 inline-block">
-                <Document file={`${bundle.baseUrl}/pdfs/${encodeURIComponent(paper.filename)}`}>
+                <Document
+                  file={`${bundle.baseUrl}/pdfs/${encodeURIComponent(paper.filename)}`}
+                  error={<p className="p-6 text-red-700">Could not render this PDF.</p>}
+                >
                   <Page
                     pageNumber={pageNumber}
                     // Our highlights are our own divs, so neither layer is needed;
