@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 # Rate-limit counters only. No corpus, no question text.
 [[kv_namespaces]]
 binding = "CAPS"
-id = "<fill from: npx wrangler kv namespace create CAPS>"
+id = "8050e79da89a4ba589a2e4d36fff7fb8"
 
 [vars]
 MODEL = "openai/gpt-oss-20b"

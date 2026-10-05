@@ -82,6 +82,26 @@ baseline is stamped `docling==2.60.0 (imported)`, which no live run can match,
 so `run docling-default` after `import-baseline` always re-converts. That is
 not the documented workflow — the baseline is meant to stay imported.
 
+## The reader
+
+`web/` is a static reader for a bundle built by `python -m lab export`. It lists the corpus, opens
+each paper's real PDF, searches the chunks two ways — semantic (bge-small-en-v1.5, vectors built
+offline, query embedded in the browser) and lexical (BM25) — and shows every result and every
+citation highlighted on the page it came from, using the bbox each chunk already carries.
+
+```
+./.venv/bin/python -m lab export docling-default --out bundles/no-ragrets-47
+cd web && npm ci && npm run dev
+```
+
+The two rankings are never combined into one score. Reading, search and highlighting are entirely
+client-side; only answering calls out, to a Cloudflare Worker that holds the model key
+(`worker/`, free tier, 15 questions a day and 3 per visitor). With the Worker absent or capped
+everything except answering still works, and the UI says which.
+
+The corpus bundle is not in git. It travels as a GitHub Release asset that the Pages workflow
+unpacks at build time, so this repo stays a tool rather than a dataset.
+
 ## Docs
 
 - Spec: `docs/superpowers/specs/2026-09-28-ingestion-lab-design.md`
