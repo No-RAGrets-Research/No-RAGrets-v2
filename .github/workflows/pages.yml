@@ -2,7 +2,7 @@ name: Deploy reader to Pages
 
 on:
   push:
-    branches: [main, part2a-reader]   # part2a-reader is temporary: drop at merge
+    branches: [main]
     paths: ["web/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
