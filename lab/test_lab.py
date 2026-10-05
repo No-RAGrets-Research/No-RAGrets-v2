@@ -3,6 +3,7 @@
 No pytest on purpose. These are asserts over hand-written IR dicts, because
 the metrics are pure functions and a PDF is not needed to test arithmetic.
 """
+import hashlib
 import pathlib
 import copy
 import sys
@@ -12,6 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from lab import ir
 from lab import manifest
+from lab import export
 
 
 def good_ir():
@@ -770,6 +772,147 @@ def test_cmd_run_refuses_a_corpus_that_drifted_from_the_manifest():
         else:
             raise AssertionError("a run over a drifted corpus was allowed")
         assert not out.exists() and state["calls"] == []
+
+
+def ir_with_pages(paper_id="Two Page Paper"):
+    """An IR whose one chunk spans a page break, which is the case that breaks
+    naive geometry: regions must group by page, not flatten into one list."""
+    return {
+        "paper_id": paper_id, "runner": "docling-default", "runner_version": "test",
+        "pdf_sha256": "0" * 64, "pages": 2, "wall_seconds": 1.0,
+        "blocks": [
+            {"page": 1, "kind": "section_header", "text": "Results", "bbox": [10, 10, 90, 20], "order": 0},
+            {"page": 1, "kind": "paragraph", "text": "First half.", "bbox": [10, 30, 90, 50], "order": 1},
+            {"page": 2, "kind": "paragraph", "text": "Second half.", "bbox": [10, 60, 90, 80], "order": 2},
+            {"page": 2, "kind": "paragraph", "text": "Unrelated.", "bbox": None, "order": 3},
+        ],
+        "tables": [],
+        "chunks": [
+            {"id": 0, "text": "First half. Second half.", "block_ids": [1, 2],
+             "section": "Results", "chars": 24},
+            {"id": 1, "text": "Unrelated.", "block_ids": [3], "section": "Results", "chars": 10},
+        ],
+    }
+
+
+def test_chunk_regions_group_rects_by_page():
+    record = ir_with_pages()
+    regions = export.chunk_regions(record, record["chunks"][0])
+    assert [r["page"] for r in regions] == [1, 2], regions
+    assert regions[0]["rects"] == [[10, 30, 90, 50]], regions
+    assert regions[1]["rects"] == [[10, 60, 90, 80]], regions
+
+
+def test_chunk_regions_is_empty_when_no_block_has_geometry():
+    record = ir_with_pages()
+    assert export.chunk_regions(record, record["chunks"][1]) == []
+
+
+def test_write_bundle_writes_files_whose_hashes_match_the_manifest():
+    record = ir_with_pages()
+    entries = [{"filename": "Two Page Paper.pdf", "sha256": "0" * 64,
+                "pages": 2, "chars_text_layer": 500, "scanned": False, "doi": None}]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        corpus = d / "corpus"
+        corpus.mkdir()
+        (corpus / "Two Page Paper.pdf").write_bytes(b"%PDF-1.4 fake")
+        out = d / "bundle"
+        manifest_written = export.write_bundle([record], entries, out, corpus)
+
+        assert manifest_written["counts"] == {"papers": 1, "chunks": 2}, manifest_written
+        assert manifest_written["source_runner"] == "docling-default"
+        for name, expected in manifest_written["files"].items():
+            actual = hashlib.sha256((out / name).read_bytes()).hexdigest()
+            assert actual == expected, f"{name} hash mismatch"
+        assert (out / "pdfs" / "Two Page Paper.pdf").exists()
+        chunks = json.loads((out / "chunks.json").read_text())
+        assert chunks[0]["regions"][0]["page"] == 1
+        assert chunks[1]["regions"] == []
+        papers = json.loads((out / "papers.json").read_text())
+        assert papers == [{"paper_id": "Two Page Paper", "filename": "Two Page Paper.pdf",
+                           "pages": 2, "sha256": "0" * 64}], papers
+
+
+def test_write_bundle_skips_a_pdf_that_is_not_in_the_corpus():
+    record = ir_with_pages()
+    entries = [{"filename": "Two Page Paper.pdf", "sha256": "0" * 64,
+                "pages": 2, "chars_text_layer": 500, "scanned": False, "doi": None}]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        corpus = d / "corpus"
+        corpus.mkdir()                      # the PDF is deliberately absent
+        out = d / "bundle"
+        written = export.write_bundle([record], entries, out, corpus)
+        assert written["missing_pdfs"] == ["Two Page Paper.pdf"], written
+        assert not (out / "pdfs" / "Two Page Paper.pdf").exists()
+        # the paper still ships: its text and regions are usable without the PDF
+        assert written["counts"]["papers"] == 1
+
+
+from lab import embed
+
+
+def test_embed_texts_normalizes_rows_even_if_the_embedder_does_not():
+    import numpy as np
+    # A deliberately unnormalized fake: cosine is only a dot product if rows are
+    # unit length, and whether fastembed normalizes is not ours to assume.
+    fake = lambda texts: [np.array([3.0, 4.0] + [0.0] * 382, dtype=np.float32) for _ in texts]
+    out = embed.embed_texts(["a", "b"], embedder=fake)
+    assert out.shape == (2, 384), out.shape
+    assert abs(float(np.linalg.norm(out[0])) - 1.0) < 1e-6
+
+
+def test_quantize_roundtrip_keeps_cosine_within_tolerance():
+    import numpy as np
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(64, 384)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+    q, scales = embed.quantize(vectors)
+    assert q.dtype == np.int8 and q.shape == (64, 384)
+    mean_error, worst_cos = embed.quantization_error(vectors, q, scales)
+    assert mean_error < 0.001, mean_error
+    assert worst_cos > 0.99, worst_cos
+
+
+def test_write_vectors_round_trips_through_the_documented_layout():
+    import numpy as np
+    fake = lambda texts: [np.full(384, i + 1, dtype=np.float32) for i, _ in enumerate(texts)]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "manifest.json").write_text(json.dumps({"counts": {"papers": 1, "chunks": 3}, "files": {}}))
+        stats = embed.write_vectors(d, ["a", "b", "c"], embedder=fake)
+        assert stats["dim"] == 384 and stats["count"] == 3
+
+        manifest = json.loads((d / "manifest.json").read_text())
+        assert manifest["embed_model"] == embed.MODEL
+        assert manifest["dim"] == 384
+        assert "vectors.bin" in manifest["files"]
+
+        raw = (d / "vectors.bin").read_bytes()
+        assert len(raw) == 3 * 4 + 3 * 384, len(raw)
+        scales = np.frombuffer(raw, dtype=np.float32, count=3)
+        q = np.frombuffer(raw, dtype=np.int8, offset=3 * 4).reshape(3, 384)
+        back = embed.dequantize(q, scales)
+        back /= np.linalg.norm(back, axis=1, keepdims=True)
+        # all three fakes are constant vectors, so every row is the same direction
+        assert float((back[0] * back[2]).sum()) > 0.999
+
+
+def test_write_bundle_does_not_disturb_an_existing_vectors_file():
+    record = ir_with_pages()
+    entries = [{"filename": "Two Page Paper.pdf", "sha256": "0" * 64,
+                "pages": 2, "chars_text_layer": 500, "scanned": False, "doi": None}]
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        corpus = d / "corpus"
+        corpus.mkdir()
+        out = d / "bundle"
+        (out / "pdfs").mkdir(parents=True)
+        (out / "vectors.bin").write_bytes(b"PRECIOUS")
+        export.write_bundle([record], entries, out, corpus)
+        assert (out / "vectors.bin").read_bytes() == b"PRECIOUS"
+
 
 if __name__ == "__main__":
     sys.exit(main())

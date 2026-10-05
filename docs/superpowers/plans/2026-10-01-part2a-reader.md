@@ -537,7 +537,7 @@ Expected: all tests pass.
 
 - [ ] **Step 6: Call it from the CLI**
 
-In `lab/cli.py`'s `cmd_export`, replace the `if args.no_embed:` block with:
+In `lab/cli.py`'s `cmd_export`, replace everything from `if args.no_embed:` **through the end of the function** — including the trailing `return 0` Task 1 left there — with:
 
 ```python
     if args.no_embed:
@@ -1088,10 +1088,14 @@ describe("bm25", () => {
     expect(hits[0].score).toBeGreaterThan(0);
   });
 
-  it("gives a term that appears in every document almost no weight", () => {
-    const everywhere = [chunk("a", "bioreactor one"), chunk("b", "bioreactor two")];
-    const hits = rank(buildIndex(everywhere), "bioreactor", 2);
-    expect(hits.every((h) => h.score <= 0.0001)).toBe(true);
+  it("weighs a term that appears in every document far below a rare one", () => {
+    // BM25's smoothed idf, log(1 + (N - df + 0.5)/(df + 0.5)), is 0.182 for a
+    // term in every document — small, not zero. The property worth pinning is
+    // the ordering, not an absolute floor.
+    const index = buildIndex(chunks);
+    const common = rank(index, "bioreactor", 3)[0].score;     // in 2 of 3 chunks
+    const rare = rank(index, "methanotrophs", 3)[0].score;    // in 1 of 3
+    expect(rare).toBeGreaterThan(common * 2);
   });
 
   it("returns nothing for an empty or unmatched query", () => {
@@ -1313,7 +1317,11 @@ print('wrote web/test-fixtures/parity.json')
 ```
 Create the directory first if needed. This fixture is the Python half of the contract and is committed.
 
-- [ ] **Step 7: Write the parity test**
+- [ ] **Step 7: Allow the JSON fixture import**
+
+Add `"resolveJsonModule": true` to `compilerOptions` in `web/tsconfig.app.json` (or `web/tsconfig.json`, whichever the Vite template put `compilerOptions` in). Without it the next step's `import parity from "../../test-fixtures/parity.json"` is a TypeScript error.
+
+- [ ] **Step 8: Write the parity test**
 
 Create `web/src/retrieval/parity.test.ts`:
 
@@ -1342,14 +1350,14 @@ describe("python/browser embedding parity", () => {
 });
 ```
 
-- [ ] **Step 8: Run the parity test and act on the result**
+- [ ] **Step 9: Run the parity test and act on the result**
 
 Run: `cd web && npx vitest run src/retrieval/parity.test.ts`
 Expected: PASS with cosine above 0.99.
 
 If it fails near 0.9x, the pooling is the suspect: try `pooling: "mean"` and re-run. **Whichever one passes, make the Python and browser sides agree and write the finding into the plan's task notes** — this is the one mismatch no runtime guard can see. If neither passes, stop and report: the model pair may not be weight-identical, which invalidates the bundle format's assumption.
 
-- [ ] **Step 9: Write the single search entry point**
+- [ ] **Step 10: Write the single search entry point**
 
 Create `web/src/retrieval/index.ts`:
 
@@ -1396,7 +1404,7 @@ export async function search(
 }
 ```
 
-- [ ] **Step 10: Run the whole suite and commit**
+- [ ] **Step 11: Run the whole suite and commit**
 
 Run: `cd web && npm test`
 Expected: every test passes, parity included.
@@ -1697,7 +1705,10 @@ export function compareRankings(semantic: Hit[], lexical: Hit[]) {
 Run: `cd web && npm test`
 Expected: both comparison tests pass.
 
-- [ ] **Step 5: Write the panel**
+- [ ] **Step 5: Write the panel, and re-enable it in `PaperList`**
+
+Task 8 Step 5 commented out `PaperList`'s `SearchPanel` import and usage to keep that task building. Uncomment both as part of this step, or corpus-wide search never renders.
+
 
 Create `web/src/components/SearchPanel.tsx`:
 

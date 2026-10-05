@@ -130,6 +130,41 @@ def cmd_import_baseline(args):
     return 0 if skipped == 0 else 1
 
 
+def cmd_export(args):
+    """Write a reader bundle from one runner's results."""
+    from lab import export, manifest
+
+    results_path = RESULTS_DIR / f"{args.runner}.jsonl"
+    if not results_path.exists():
+        raise SystemExit(f"{results_path} not found — run: python -m lab run {args.runner}")
+    records = [json.loads(line) for line in results_path.read_text().splitlines() if line.strip()]
+
+    written = export.write_bundle(
+        records, manifest.load(), pathlib.Path(args.out), manifest.corpus_dir(),
+    )
+    print(f"wrote {args.out}: {written['counts']['papers']} papers, "
+          f"{written['counts']['chunks']} chunks")
+    no_regions = sum(1 for c in json.loads((pathlib.Path(args.out) / "chunks.json").read_text())
+                     if not c["regions"])
+    print(f"  chunks without geometry: {no_regions}")
+    if written["missing_pdfs"]:
+        print(f"  PDFs not found in the corpus: {len(written['missing_pdfs'])}")
+
+    if args.no_embed:
+        print("  --no-embed: vectors.bin left alone, semantic search unavailable")
+        return 0
+
+    from lab import embed
+
+    chunks = json.loads((pathlib.Path(args.out) / "chunks.json").read_text())
+    stats = embed.write_vectors(pathlib.Path(args.out), [c["text"] for c in chunks])
+    print(f"  embedded {stats['count']} chunks with {embed.MODEL} "
+          f"({stats['bytes'] / 1e6:.2f} MB)")
+    print(f"  int8 quantization: mean cosine error {stats['mean_cosine_error']:.5f}, "
+          f"worst row cosine {stats['worst_cosine']:.4f}")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="python -m lab")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -151,6 +186,12 @@ def build_parser():
     i = sub.add_parser("import-baseline", help="import existing DoclingDocument JSON as the baseline")
     i.add_argument("directory", help="e.g. ../No-RAGrets-Master/data/docling_json")
     i.set_defaults(func=cmd_import_baseline)
+
+    e = sub.add_parser("export", help="write a reader bundle from a runner's results")
+    e.add_argument("runner")
+    e.add_argument("--out", required=True, help="e.g. bundles/no-ragrets-47")
+    e.add_argument("--no-embed", action="store_true", help="skip embeddings")
+    e.set_defaults(func=cmd_export)
 
     return parser
 
