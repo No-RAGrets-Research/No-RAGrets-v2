@@ -42,6 +42,10 @@ export function SearchPanel({ bundle }: { bundle: Bundle }) {
   const [lexical, setLexical] = useState<Hit[]>([]);
   const [semanticNote, setSemanticNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Distinguishes "searched and found nothing" from "has not searched yet".
+  // Without it a zero-hit query removes the whole results region and reads
+  // as a broken search box rather than an empty result (Ruling 22).
+  const [searched, setSearched] = useState(false);
   const byId = new Map(bundle.chunks.map((c) => [c.id, c]));
 
   async function run(event: React.FormEvent) {
@@ -63,6 +67,7 @@ export function SearchPanel({ bundle }: { bundle: Bundle }) {
             : "Semantic search is off: this bundle has no vectors.",
       );
     }
+    setSearched(true);
     setBusy(false);
   }
 
@@ -81,12 +86,20 @@ export function SearchPanel({ bundle }: { bundle: Bundle }) {
         <button className="rounded border px-3" disabled={busy}>{busy ? "…" : "Search"}</button>
       </form>
 
+      {searched && semantic.length === 0 && lexical.length === 0 && (
+        <p className="mt-3 text-sm text-neutral-700">
+          No results for “{query}”.{semanticNote ? ` ${semanticNote}` : ""}
+        </p>
+      )}
+
       {(semantic.length > 0 || lexical.length > 0) && (
         <>
-          <p className="mt-3 text-xs text-neutral-600">
-            {diff.overlap} of 10 results appear in both rankings. The two are never combined into one
-            score — read them as two opinions.
-          </p>
+          {semantic.length > 0 && lexical.length > 0 && (
+            <p className="mt-3 text-xs text-neutral-600">
+              {diff.overlap} of {Math.min(semantic.length, lexical.length)} results appear in both
+              rankings. The two are never combined into one score — read them as two opinions.
+            </p>
+          )}
           <div className="mt-2 grid gap-6 md:grid-cols-2">
             <Results title="Semantic" hits={semantic} byId={byId} note={semanticNote ?? undefined} />
             <Results title="Lexical (BM25)" hits={lexical} byId={byId} />

@@ -19,9 +19,12 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 export function Reader({ bundle }: { bundle: Bundle }) {
   const { paperId = "" } = useParams();
   const [params] = useSearchParams();
-  const paper = bundle.papers.find((p) => p.paper_id === decodeURIComponent(paperId));
+  // No decoding here or below: react-router already decodes each path
+  // segment (its decodePath), so a second pass is a no-op on these ids and
+  // throws URIError on any id containing a literal %, blanking the app.
+  const paper = bundle.papers.find((p) => p.paper_id === paperId);
   const chunks = useMemo(
-    () => bundle.chunks.filter((c) => c.paper_id === decodeURIComponent(paperId)),
+    () => bundle.chunks.filter((c) => c.paper_id === paperId),
     [bundle, paperId],
   );
   const focused = chunks.find((c) => c.id === params.get("chunk")) ?? null;
@@ -42,7 +45,7 @@ export function Reader({ bundle }: { bundle: Bundle }) {
     if (firstRegion) setPageNumber(firstRegion.page);
   }, [focused?.id]);
 
-  if (!paper) return <p className="p-6">No paper called {decodeURIComponent(paperId)} in this bundle.</p>;
+  if (!paper) return <p className="p-6">No paper called {paperId} in this bundle.</p>;
 
   const pdfMissing = bundle.manifest.missing_pdfs.includes(paper.filename);
   const rects = focused?.regions.find((r) => r.page === pageNumber)?.rects ?? [];

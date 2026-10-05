@@ -23,7 +23,13 @@ export function AskBox({ bundle, scope }: { bundle: Bundle; scope: Scope }) {
     setReply(null);
     try {
       const mode = bundle.semantic.available ? "semantic" : "lexical";
-      const hits = await search(bundle, question, { mode, k: TOP_K * 3 });
+      // In paper scope the filter below runs AFTER retrieval, so a corpus-wide
+      // top-24 of 2,800 chunks rarely contains enough of one 30-chunk paper to
+      // ask about — the reader then sees "nothing matched" for a fair question.
+      // Both rankers already score and sort every chunk, so asking for all of
+      // them costs nothing and lets the model issue the refusal instead.
+      const k = scope.kind === "paper" ? bundle.chunks.length : TOP_K * 3;
+      const hits = await search(bundle, question, { mode, k });
       const picked = hits
         .map((h) => byId.get(h.chunk_id)!)
         .filter((c) => scope.kind === "corpus" || c.paper_id === scope.paperId)
@@ -64,6 +70,10 @@ export function AskBox({ bundle, scope }: { bundle: Bundle; scope: Scope }) {
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="What did they measure?"
           aria-label="Ask a question"
+          // The Worker rejects anything over 500 with a 400 that ask.ts files
+          // under "server", so an over-long question reads as "The answer
+          // service failed". The native cap stops it being sent at all.
+          maxLength={500}
         />
         <button className="rounded border px-3 text-sm" disabled={busy || !question.trim()}>
           {busy ? "…" : "Ask"}
