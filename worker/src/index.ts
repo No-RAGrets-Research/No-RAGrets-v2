@@ -66,6 +66,16 @@ export default {
       return json({ error: "bad-model" }, 500, origin);
     }
 
+    // Same reasoning, and the same place in the order: an unset secret is a
+    // deploy mistake, not a visitor's fault. llm-kit only raises no-key for an
+    // empty string, so an absent binding would instead reach Groq as a missing
+    // Authorization header, come back 401, and charge a visitor and the day
+    // for an answer nobody got.
+    if (!env.GROQ_API_KEY) {
+      console.log("ask failed kind=no-key");
+      return json({ error: "no-key" }, 500, origin);
+    }
+
     const visitor = request.headers.get("cf-connecting-ip") ?? "unknown";
     const day = new Date().toISOString().slice(0, 10);
     const decision = await checkAndCount(env.CAPS, visitor, day, {

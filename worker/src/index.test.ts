@@ -88,4 +88,16 @@ describe("fetch", () => {
     expect(parsed).toHaveProperty("error");
     expect((env.CAPS as ReturnType<typeof fakeKv>).store.size).toBe(0);
   });
+
+  // The deployed Worker ran for a day with no GROQ_API_KEY set. Without this
+  // gate that is not a visible misconfiguration, it is a quota leak: every
+  // attempt counts, then 401s, so the day's 15 answers are spent on nothing.
+  it("returns a readable error with CORS headers for an absent GROQ_API_KEY, without spending quota", async () => {
+    const env = baseEnv({ GROQ_API_KEY: undefined as unknown as string });
+    const res = await worker.fetch(postRequest({ origin: ORIGIN }), env);
+    expect(res.status).toBe(500);
+    expect(res.headers.get("access-control-allow-origin")).toBe(ORIGIN);
+    expect(await res.json()).toEqual({ error: "no-key" });
+    expect((env.CAPS as ReturnType<typeof fakeKv>).store.size).toBe(0);
+  });
 });
